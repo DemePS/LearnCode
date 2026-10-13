@@ -123,6 +123,13 @@ class CaptureUI(UI):
         self._buffer = ""
 
 
+# seedagent's loop always does `(state.system_prompt or SYSTEM_PROMPT).format(workspace=...)`
+# (see seedagent/loop.py's system_param), so a custom system_prompt with literal braces -- this one
+# is full of JSON examples -- must have them doubled or .format() raises KeyError on each one. Kept
+# as a derived constant rather than writing {{ }} throughout PAGE_SYSTEM_PROMPT itself, which would
+# make it unreadable and easy to get wrong when editing. This prompt never references {workspace}.
+_ESCAPED_PAGE_SYSTEM_PROMPT = PAGE_SYSTEM_PROMPT.replace("{", "{{").replace("}", "}}")
+
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 _LOCK = threading.Lock()
 
@@ -154,7 +161,7 @@ def run_turn(workspace: Path, message: str, resume: bool) -> dict:
     the calling thread while the model answers; call it from a worker thread in async code."""
     ui = CaptureUI()
     with _LOCK:
-        session.open_project(workspace, ui=ui, tools=[], system_prompt=PAGE_SYSTEM_PROMPT, resume=resume)
+        session.open_project(workspace, ui=ui, tools=[], system_prompt=_ESCAPED_PAGE_SYSTEM_PROMPT, resume=resume)
         ok = session.send(message)
     if not ok or not ui.final_text.strip():
         return _error_page("The agent did not answer.")
