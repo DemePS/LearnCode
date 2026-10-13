@@ -2,7 +2,6 @@
 name = "learncode-backend"
 version = "0.1.0"
 description = "FastAPI backend for LearnCode: a project-based coding-practice app whose pages are generated at runtime by seedagent"
-readme = "../README.md"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115,<1",
