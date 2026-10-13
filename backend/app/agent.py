@@ -215,17 +215,26 @@ def clarify(objective: str, history: list[dict]) -> dict:
 class CaptureUI(UI):
     """No person attached: every question is refused (this session offers no tools), and the final
     answer text of the turn (the one that ends the turn, as opposed to text written before a tool
-    call) is kept in `final_text`."""
+    call) is kept in `final_text`. `error_text` is the other thing worth capturing: when
+    session.send() fails, seedagent's loop calls state.ui.error(explanation) with the real reason
+    (an auth problem, a rate limit, a context-window overflow, a network error...) right before
+    returning False -- the base UI.error() does nothing with it by default, which silently turned
+    every real failure into run_turn's generic, undiagnosable "The agent did not answer.\""""
 
     def __init__(self) -> None:
         self._buffer = ""
         self.final_text = ""
+        self.error_text: str | None = None
 
     def confirm(self, question: str, choices: tuple[str, ...] = ("yes", "no")) -> str:
         return "no" if "no" in choices else choices[-1]
 
     def ask_text(self, prompt: str, multiline: bool = False) -> str:
         return ""
+
+    def error(self, text: str) -> None:
+        self.error_text = text
+        _log.error("seedagent reported: %s", text)
 
     def assistant_start(self) -> None:
         pass
@@ -313,8 +322,10 @@ def run_turn(workspace: Path, message: str, resume: bool) -> dict:
     with _LOCK:
         session.open_project(workspace, ui=ui, tools=[], system_prompt=_ESCAPED_PAGE_SYSTEM_PROMPT, resume=resume)
         ok = session.send(message)
-    if not ok or not ui.final_text.strip():
-        return _error_page("The agent did not answer.")
+    if not ok:
+        return _error_page(ui.error_text or "The agent did not answer (no further detail was reported).")
+    if not ui.final_text.strip():
+        return _error_page("The agent's reply was empty." + (f"\n\n{ui.error_text}" if ui.error_text else ""))
     try:
         return _extract_json(ui.final_text)
     except json.JSONDecodeError as e:
