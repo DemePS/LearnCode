@@ -1,0 +1,248 @@
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --border: #2a2e38;
+  --text: #e6e8eb;
+  --muted: #9aa1ac;
+  --accent: #5b8cff;
+  --good: #3ecf8e;
+  --bad: #e5565a;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.shell {
+  min-height: 100vh;
+}
+
+.shell-centered {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+main {
+  max-width: 840px;
+  margin: 0 auto;
+  padding: 32px 24px 80px;
+}
+
+.objective-form {
+  max-width: 560px;
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+}
+
+.objective-form h1 {
+  margin-top: 0;
+  font-size: 1.4rem;
+}
+
+.objective-hint {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.objective-form textarea {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 1rem;
+  resize: vertical;
+}
+
+.btn {
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 0.95rem;
+  cursor: pointer;
+  margin-top: 12px;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: white;
+}
+
+.btn-secondary {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn-link {
+  background: none;
+  color: var(--muted);
+  text-decoration: underline;
+  margin-top: 0;
+  padding: 0;
+}
+
+.error {
+  color: var(--bad);
+}
+
+.block {
+  margin-bottom: 20px;
+}
+
+.block-stat-row {
+  display: flex;
+  gap: 24px;
+}
+
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 18px;
+}
+
+.stat-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.stat-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.block-roadmap {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.roadmap-item {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 4px 12px;
+}
+
+.roadmap-item.clickable {
+  cursor: pointer;
+}
+
+.roadmap-item.clickable:hover {
+  border-color: var(--accent);
+}
+
+.roadmap-item.status-locked {
+  opacity: 0.5;
+}
+
+.roadmap-item.status-done {
+  border-color: var(--good);
+}
+
+.roadmap-status {
+  grid-row: 1 / 3;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  align-self: center;
+}
+
+.roadmap-title {
+  font-weight: 600;
+}
+
+.roadmap-summary {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.code-editor-shell {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.code-editor-filename {
+  background: var(--panel);
+  padding: 6px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.code-editor-actions {
+  margin-top: 12px;
+}
+
+.block-feedback {
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid var(--border);
+}
+
+.block-feedback.passed {
+  border-color: var(--good);
+}
+
+.block-feedback.failed {
+  border-color: var(--bad);
+}
+
+.feedback-summary {
+  font-weight: 600;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.block-feedback.passed .feedback-icon {
+  color: var(--good);
+}
+
+.block-feedback.failed .feedback-icon {
+  color: var(--bad);
+}
+
+.block-actions {
+  display: flex;
+  gap: 10px;
+}
