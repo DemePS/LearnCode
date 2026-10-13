@@ -27,9 +27,10 @@ for a prototype (survives a server restart), not for shipping.
   ever needed) -- `backend/data/workspaces/` won't survive a redeploy or scale past one instance.
 
 ## Other known gaps
-- `agent.py`'s `_LOCK` serializes every call into seedagent process-wide (see its module docstring) --
-  acceptable for a demo, not for concurrent users; the persistence rework above (dropping seedagent's
-  own conversation/resume machinery) also resolves this.
+- `agent.py`'s `_LOCK` still serializes every `run_turn`/`ask` call into seedagent process-wide (see its
+  module docstring) -- acceptable for a demo, not for concurrent users. `agent.clarify()` already shows
+  the way out: it bypasses seedagent's session/project/lock entirely (a plain, stateless Anthropic call),
+  which is exactly the pattern the persistence rework above should extend to `run_turn` and `ask` too.
 - No live end-to-end test against a real model yet (everything so far has been verified with
   `seedagent.session` mocked, plus Playwright against those mocks) -- worth a real run with a live
   `ANTHROPIC_API_KEY` to confirm the model reliably follows the page-spec format, grounds roadmaps in
