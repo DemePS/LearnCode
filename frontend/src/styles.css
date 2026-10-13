@@ -246,3 +246,39 @@ main {
   display: flex;
   gap: 10px;
 }
+
+.block-markdown table,
+.code-editor-instructions table,
+.feedback-details table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+
+.block-markdown th,
+.block-markdown td,
+.code-editor-instructions th,
+.code-editor-instructions td,
+.feedback-details th,
+.feedback-details td {
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.block-markdown th,
+.code-editor-instructions th,
+.feedback-details th {
+  background: var(--panel);
+}
+
+.block-markdown code,
+.code-editor-instructions code,
+.feedback-details code {
+  background: var(--panel);
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}

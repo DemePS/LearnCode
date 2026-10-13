@@ -1,5 +1,5 @@
-import ReactMarkdown from "react-markdown";
 import type { FeedbackBlock } from "../../types";
+import { Md } from "../Md";
 
 export function Feedback({ block }: { block: FeedbackBlock }) {
   return (
@@ -9,7 +9,7 @@ export function Feedback({ block }: { block: FeedbackBlock }) {
         {block.summary}
       </div>
       <div className="feedback-details">
-        <ReactMarkdown>{block.details}</ReactMarkdown>
+        <Md>{block.details}</Md>
       </div>
     </div>
   );

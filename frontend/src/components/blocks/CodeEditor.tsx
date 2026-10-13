@@ -1,7 +1,7 @@
 import Editor from "@monaco-editor/react";
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
 import type { CodeEditorBlock } from "../../types";
+import { Md } from "../Md";
 
 export function CodeEditor({
   block,
@@ -17,7 +17,7 @@ export function CodeEditor({
   return (
     <div className="block block-code-editor">
       <div className="code-editor-instructions">
-        <ReactMarkdown>{block.instructions}</ReactMarkdown>
+        <Md>{block.instructions}</Md>
       </div>
       <div className="code-editor-shell">
         <div className="code-editor-filename">{block.file_name}</div>
