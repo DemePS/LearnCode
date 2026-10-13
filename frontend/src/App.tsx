@@ -1,6 +1,17 @@
-import { useEffect, useState } from "react";
-import { clarify, getSession, sendAction, startSession } from "./api";
+import { useEffect, useRef, useState } from "react";
+import {
+  AuthError,
+  clarify,
+  clearToken,
+  getSession,
+  getToken,
+  saveDraft,
+  sendAction,
+  setToken,
+  startSession,
+} from "./api";
 import { AskAI } from "./components/AskAI";
+import { AuthForm } from "./components/AuthForm";
 import { PageRenderer } from "./components/PageRenderer";
 import { QuestionPrompt } from "./components/QuestionPrompt";
 import type { ClarifyTurn, Page } from "./types";
@@ -9,8 +20,10 @@ const SESSION_STORAGE_KEY = "learncode.session_id";
 // Reserved action id the frontend's own "Back to roadmap" button always sends, regardless of what
 // action ids the agent invented for its own buttons on the current page (see PAGE_SYSTEM_PROMPT).
 const SHOW_ROADMAP_ACTION = "show_roadmap";
+const DRAFT_AUTOSAVE_DEBOUNCE_MS = 1200;
 
 function App() {
+  const [authed, setAuthed] = useState(() => !!getToken());
   const [sessionId, setSessionId] = useState<string | null>(() =>
     localStorage.getItem(SESSION_STORAGE_KEY),
   );
@@ -28,13 +41,30 @@ function App() {
   const [clarifyHistory, setClarifyHistory] = useState<ClarifyTurn[]>([]);
   const [clarifyQuestion, setClarifyQuestion] = useState<string | null>(null);
 
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Any API call can fail with AuthError (token missing/expired/invalid) at any point, not just at
+   * login -- signs the learner out and back to the login form instead of showing a raw error. */
+  function handleError(err: unknown): boolean {
+    if (err instanceof AuthError) {
+      clearToken();
+      setAuthed(false);
+      return true;
+    }
+    setError(err instanceof Error ? err.message : String(err));
+    return false;
+  }
+
   useEffect(() => {
     if (!resuming || !sessionId) return;
     getSession(sessionId)
       .then((res) => setPage(res.page))
-      .catch(() => {
-        localStorage.removeItem(SESSION_STORAGE_KEY);
-        setSessionId(null);
+      .catch((err) => {
+        if (!(err instanceof AuthError)) {
+          localStorage.removeItem(SESSION_STORAGE_KEY);
+          setSessionId(null);
+        }
+        handleError(err);
       })
       .finally(() => setResuming(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -63,7 +93,7 @@ function App() {
     try {
       await proceed(objective.trim(), []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      handleError(err);
     } finally {
       setLoading(false);
     }
@@ -78,7 +108,7 @@ function App() {
     try {
       await proceed(objective.trim(), history);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      handleError(err);
     } finally {
       setLoading(false);
     }
@@ -93,13 +123,29 @@ function App() {
       setPage(res.page);
       setCurrentCode(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      handleError(err);
     } finally {
       setLoading(false);
     }
   }
 
+  /** Fires on every keystroke in a code_editor block: keeps the floating help widget's context
+   * fresh immediately, and (debounced, so typing doesn't fire a request per character) autosaves
+   * the draft so it survives a refresh or a detour to another exercise without being submitted. */
+  function handleCodeChange(exerciseId: string, fileName: string, code: string) {
+    setCurrentCode({ exerciseId, fileName, code });
+    if (!sessionId) return;
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      saveDraft(sessionId, exerciseId, code).catch(() => {
+        // A missed autosave tick isn't worth interrupting the learner over; the next keystroke
+        // retries, and nothing has been lost yet if they submit before any autosave lands.
+      });
+    }, DRAFT_AUTOSAVE_DEBOUNCE_MS);
+  }
+
   function startOver() {
+    if (draftTimer.current) clearTimeout(draftTimer.current);
     localStorage.removeItem(SESSION_STORAGE_KEY);
     setSessionId(null);
     setPage(null);
@@ -108,6 +154,23 @@ function App() {
     setCurrentCode(null);
     setClarifyHistory([]);
     setClarifyQuestion(null);
+  }
+
+  function logOut() {
+    clearToken();
+    setAuthed(false);
+    startOver();
+  }
+
+  if (!authed) {
+    return (
+      <AuthForm
+        onAuthenticated={(token) => {
+          setToken(token);
+          setAuthed(true);
+        }}
+      />
+    );
   }
 
   if (resuming) {
@@ -139,6 +202,9 @@ function App() {
               {loading ? "Thinking…" : "Start"}
             </button>
             {error && <p className="error">{error}</p>}
+            <button type="button" className="btn btn-link" onClick={logOut}>
+              Log out
+            </button>
           </form>
         )}
       </div>
@@ -165,16 +231,14 @@ function App() {
           <button className="btn btn-link" onClick={startOver}>
             Start a new project
           </button>
+          <button className="btn btn-link" onClick={logOut}>
+            Log out
+          </button>
         </div>
       </header>
       <main>
         {error && <p className="error">{error}</p>}
-        <PageRenderer
-          page={page}
-          onAction={handleAction}
-          submitting={loading}
-          onCodeChange={(exerciseId, fileName, code) => setCurrentCode({ exerciseId, fileName, code })}
-        />
+        <PageRenderer page={page} onAction={handleAction} submitting={loading} onCodeChange={handleCodeChange} />
       </main>
       <AskAI sessionId={sessionId} currentCode={currentCode} />
     </div>

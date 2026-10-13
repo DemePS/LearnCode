@@ -1,12 +1,16 @@
-"""The AI client: seedagent, used as a pure text generator that always answers with one JSON
-"page spec" instead of editing files. Each learning session is a seedagent project (a folder under
-DATA_DIR/workspaces/<session_id>), so seedagent's own on-disk conversation (resume=True) carries the
-history between HTTP requests without this process keeping anything in memory itself.
+"""The AI client: seedagent's own Anthropic client/model config (_get_client(), get_model() -- the
+same pair session.check_connection() uses for a plain ping), used as a pure text generator that
+always answers with one JSON "page spec" instead of editing files.
 
-seedagent keeps its state (seedagent.state, seedagent.session.messages) in module-level globals, by
-design for a single interactive CLI session (see CodeAgent's CLAUDE.md, "concurrency" section) -- it
-is not safe to call into it from two requests at once. _LOCK below serializes every call; fine for a
-practice app, not for high concurrency (see README "Limitations").
+Each call here is stateless: the caller (routes.py) loads a project's conversation from the database
+(crud.load_messages) and passes it in; run_turn()/ask() never touch any shared state of their own.
+This replaced an earlier version that went through seedagent.session (open_project/send), which kept
+its conversation in a file and its state in module-level globals -- by design, for a single
+interactive CLI session (see CodeAgent's own CLAUDE.md, "concurrency" section) -- and needed a global
+threading.Lock around every call because two requests touching that shared state at once would
+corrupt it. Storing the conversation in our own database instead removes the need for any of that:
+there is no shared process state left to protect, so multiple backend instances -- or just many
+concurrent requests in one instance -- can each run their own turn independently, no lock required.
 """
 
 from __future__ import annotations
@@ -15,12 +19,8 @@ import json
 import logging
 import random
 import re
-import threading
-from pathlib import Path
 
-from seedagent import session
 from seedagent.config import _get_client, get_model
-from seedagent.ui import UI
 
 PAGE_SYSTEM_PROMPT = """\
 You are the engine behind a project-based coding-practice app. There is no hand-authored content:
@@ -168,137 +168,20 @@ Reply with exactly one JSON object, nothing else:
 {"ready": false, "question": "..."} -- one short question, the next (and only the next) one to ask
 """
 
-
-def clarify(objective: str, history: list[dict]) -> dict:
-    """A lightweight, stateless call -- seedagent's own Anthropic client and model (the same
-    get_model()/_get_client() its own session.check_connection() uses for a plain ping), but no
-    agent loop, no tools, no project workspace -- used before any seedagent "project" exists, to
-    decide whether to ask the learner one more clarifying question or hand off to run_turn to design
-    the roadmap. `history` is the growing list of {"question": str, "answer": str} already asked;
-    the caller (routes.py) keeps it (nothing this short-lived needs its own persisted conversation).
-    Returns {"ready": True} or {"ready": False, "question": str}; fails open to {"ready": True} if
-    the model's reply can't be read, so a hiccup here never blocks a learner from starting."""
-    parts = [f"Learning objective: {objective}"]
-    for turn in history:
-        parts.append(f"Q: {turn['question']}\nA: {turn['answer']}")
-    try:
-        response = _get_client().messages.create(
-            model=get_model(),
-            max_tokens=300,
-            system=CLARIFY_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": "\n\n".join(parts)}],
-        )
-    except Exception:
-        # Fails open (never blocks a learner from starting just because this one call had a bad
-        # moment) -- but silently, by design, meant something as common as a transient network blip
-        # looked identical to "the model decided it's ready", with nothing in the logs either way.
-        # Logged now specifically because that made a real, persistent failure (bad credentials, a
-        # wrong model name, anything not transient) indistinguishable from normal "no question
-        # needed" behavior -- there was no way to tell, from the outside, that this was ever firing.
-        _log.exception("agent.clarify: the model call failed; failing open to ready=True")
-        return {"ready": True}
-    text = "".join(block.text for block in response.content if block.type == "text")
-    try:
-        result = _extract_json(text)
-    except json.JSONDecodeError:
-        _log.warning("agent.clarify: could not parse the model's reply as JSON; failing open to ready=True: %r", text[:500])
-        return {"ready": True}
-    if result.get("ready") is True:
-        return {"ready": True}
-    question = result.get("question")
-    if not isinstance(question, str) or not question.strip():
-        _log.warning("agent.clarify: model said ready=False but gave no usable question; failing open: %r", result)
-        return {"ready": True}
-    return {"ready": False, "question": question.strip()}
-
-
-class CaptureUI(UI):
-    """No person attached: every question is refused (this session offers no tools), and the final
-    answer text of the turn (the one that ends the turn, as opposed to text written before a tool
-    call) is kept in `final_text`. `error_text` is the other thing worth capturing: when
-    session.send() fails, seedagent's loop calls state.ui.error(explanation) with the real reason
-    (an auth problem, a rate limit, a context-window overflow, a network error...) right before
-    returning False -- the base UI.error() does nothing with it by default, which silently turned
-    every real failure into run_turn's generic, undiagnosable "The agent did not answer."
-
-    Also logs everything seedagent reports along the way -- tool calls (there are none today, since
-    run_turn passes tools=[], but this is ready for when that changes), status lines, thinking
-    markers, and how each turn actually ended (response_end's stop_reason) -- none of which was
-    visible anywhere before. `_prefix` (a short per-call tag, e.g. the session id) keeps concurrent
-    turns' log lines distinguishable from each other, since this app runs several sessions at once."""
-
-    def __init__(self, prefix: str = "") -> None:
-        self._buffer = ""
-        self.final_text = ""
-        self.error_text: str | None = None
-        self._prefix = f"[{prefix}] " if prefix else ""
-
-    def confirm(self, question: str, choices: tuple[str, ...] = ("yes", "no")) -> str:
-        return "no" if "no" in choices else choices[-1]
-
-    def ask_text(self, prompt: str, multiline: bool = False) -> str:
-        return ""
-
-    def error(self, text: str) -> None:
-        self.error_text = text
-        _log.error("%sseedagent error: %s", self._prefix, text)
-
-    def status(self, text: str) -> None:
-        _log.info("%s%s", self._prefix, text)
-
-    def message(self, text: str) -> None:
-        _log.info("%s%s", self._prefix, text)
-
-    def warning(self, text: str) -> None:
-        _log.warning("%s%s", self._prefix, text)
-
-    def thinking(self) -> None:
-        _log.debug("%sthinking...", self._prefix)
-
-    def tool_start(self, name: str) -> None:
-        _log.info("%s-> tool: %s", self._prefix, name)
-
-    def tool_detail(self, text: str) -> None:
-        _log.debug("%s   args: %s", self._prefix, text)
-
-    def tool_result(self, name: str, arguments: str, ok: bool, summary: str) -> None:
-        _log.info("%s<- tool: %s %s: %s", self._prefix, name, "ok" if ok else "FAILED", summary)
-
-    def assistant_start(self) -> None:
-        pass
-
-    def assistant_text(self, text: str) -> None:
-        self._buffer += text
-
-    def response_end(self, stop_reason: str | None) -> None:
-        _log.info("%sturn ended: stop_reason=%s, %d chars written", self._prefix, stop_reason, len(self._buffer))
-        if stop_reason == "end_turn":
-            self.final_text = self._buffer
-        self._buffer = ""
-
-
-# seedagent's loop always does `(state.system_prompt or SYSTEM_PROMPT).format(workspace=...)`
-# (see seedagent/loop.py's system_param), so a custom system_prompt with literal braces -- this one
-# is full of JSON examples -- must have them doubled or .format() raises KeyError on each one. Kept
-# as a derived constant rather than writing {{ }} throughout PAGE_SYSTEM_PROMPT itself, which would
-# make it unreadable and easy to get wrong when editing. This prompt never references {workspace}.
-_ESCAPED_PAGE_SYSTEM_PROMPT = PAGE_SYSTEM_PROMPT.replace("{", "{{").replace("}", "}}")
-
-_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
-_LOCK = threading.Lock()
-
 _log = logging.getLogger(__name__)
 _log.setLevel(logging.INFO)
 if not _log.handlers:
     # A dedicated handler, not logging.basicConfig(): uvicorn configures the root logger's handlers
     # itself (for its own access/error logs), and basicConfig() is a no-op once that's happened --
     # so relying on it would make whether these lines appear at all depend on import order. This
-    # guarantees CaptureUI's tool/status/error trace (see its docstring) always reaches stderr,
-    # regardless of whatever the rest of the process does with logging.
+    # guarantees the trace below always reaches stderr, regardless of the rest of the process.
     _handler = logging.StreamHandler()
     _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     _log.addHandler(_handler)
     _log.propagate = False
+
+_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+_JSON_DECODER = json.JSONDecoder()
 
 # Wording alone ("vary what you build") doesn't reliably stop a model from converging on the same
 # single "obvious" project for a given theme -- a learner reported exactly that (same theme, same
@@ -327,9 +210,6 @@ def variety_hint() -> str:
     return f"(Variety seed: {seed}. Lean toward: {angle}.)"
 
 
-_JSON_DECODER = json.JSONDecoder()
-
-
 def _extract_json(text: str) -> dict:
     """Parse the one page-spec JSON object out of the model's reply. Deliberately not `rfind("}")`
     to find the end: a page's markdown content is itself likely to contain literal braces (Jinja's
@@ -356,42 +236,89 @@ def _error_page(detail: str) -> dict:
     }
 
 
-def run_turn(workspace: Path, message: str, resume: bool) -> dict:
-    """Run one instruction in this session's project and return the resulting Page (a dict). Blocks
-    the calling thread while the model answers; call it from a worker thread in async code."""
-    ui = CaptureUI(prefix=workspace.name)
-    with _LOCK:
-        session.open_project(workspace, ui=ui, tools=[], system_prompt=_ESCAPED_PAGE_SYSTEM_PROMPT, resume=resume)
-        ok = session.send(message)
-    if not ok:
-        return _error_page(ui.error_text or "The agent did not answer (no further detail was reported).")
-    if not ui.final_text.strip():
-        return _error_page("The agent's reply was empty." + (f"\n\n{ui.error_text}" if ui.error_text else ""))
+def clarify(objective: str, history: list[dict]) -> dict:
+    """A lightweight, stateless call used before any project exists, to decide whether to ask the
+    learner one more clarifying question or hand off to run_turn to design the roadmap. `history` is
+    the growing list of {"question": str, "answer": str} already asked; the caller (routes.py) keeps
+    it (nothing this short-lived needs its own persisted conversation). Returns {"ready": True} or
+    {"ready": False, "question": str}; fails open to {"ready": True} if the model's reply can't be
+    read, so a hiccup here never blocks a learner from starting."""
+    parts = [f"Learning objective: {objective}"]
+    for turn in history:
+        parts.append(f"Q: {turn['question']}\nA: {turn['answer']}")
     try:
-        return _extract_json(ui.final_text)
+        response = _get_client().messages.create(
+            model=get_model(),
+            max_tokens=300,
+            system=CLARIFY_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": "\n\n".join(parts)}],
+        )
+    except Exception:
+        _log.exception("agent.clarify: the model call failed; failing open to ready=True")
+        return {"ready": True}
+    text = "".join(block.text for block in response.content if block.type == "text")
+    try:
+        result = _extract_json(text)
+    except json.JSONDecodeError:
+        _log.warning("agent.clarify: could not parse the model's reply as JSON; failing open to ready=True: %r", text[:500])
+        return {"ready": True}
+    if result.get("ready") is True:
+        return {"ready": True}
+    question = result.get("question")
+    if not isinstance(question, str) or not question.strip():
+        _log.warning("agent.clarify: model said ready=False but gave no usable question; failing open: %r", result)
+        return {"ready": True}
+    return {"ready": False, "question": question.strip()}
+
+
+def run_turn(messages: list[dict], user_message: str, prefix: str = "") -> tuple[dict, str]:
+    """Run one turn and return (page, assistant_text) -- the caller persists both the user message
+    and assistant_text (crud.append_turn) so the next call's `messages` includes this one. Stateless:
+    no lock, no shared state (see this module's docstring); `messages` is everything this call knows
+    about the project so far. `prefix` (e.g. a project id) tags log lines so concurrent turns'
+    traces don't interleave unreadably."""
+    tag = f"[{prefix}] " if prefix else ""
+    full_messages = [*messages, {"role": "user", "content": user_message}]
+    try:
+        response = _get_client().messages.create(
+            model=get_model(), max_tokens=16000, system=PAGE_SYSTEM_PROMPT, messages=full_messages
+        )
+    except Exception as e:
+        _log.exception("%srun_turn: the model call failed", tag)
+        return _error_page(str(e)), ""
+    text = "".join(block.text for block in response.content if block.type == "text")
+    _log.info("%srun_turn: stop_reason=%s, %d chars written", tag, response.stop_reason, len(text))
+    if not text.strip():
+        return _error_page("The agent's reply was empty."), text
+    try:
+        return _extract_json(text), text
     except json.JSONDecodeError as e:
-        return _error_page(f"{e}\n\n{ui.final_text[:2000]}")
+        return _error_page(f"{e}\n\n{text[:2000]}"), text
 
 
-def ask(workspace: Path, question: str, context: dict) -> str:
-    """The floating help-widget side channel: answered in the same session (so it has the full
-    conversation -- what project, what exercise, what's already been submitted) but, per the "Side
+def ask(messages: list[dict], question: str, context: dict, prefix: str = "") -> str:
+    """The floating help-widget side channel: answered with the same project history (so it has
+    full context -- what project, what exercise, what's already been submitted) but, per the "Side
     questions" rule in PAGE_SYSTEM_PROMPT, as plain prose rather than a page -- so the answer can be
     shown alongside whatever is currently on screen (an in-progress code_editor, say) without
-    replacing it or losing unsaved edits, unlike run_turn's page swap."""
-    message = (
+    replacing it or losing unsaved edits, unlike run_turn's page swap. Not persisted back into the
+    project's conversation: a side question is answered fresh each time against the project history,
+    not accumulated into it."""
+    tag = f"[{prefix}] " if prefix else ""
+    user_message = (
         "The learner asked a question via the floating help widget. This is a side question, not a "
         "page navigation: answer it in plain markdown prose only, per the \"Side questions\" rule -- "
         "do not return page JSON, and nothing about their current screen should need to change.\n\n"
         f"Question: {question}\n\n"
         f"Context (their current exercise/code, if any): {json.dumps(context)}"
     )
-    ui = CaptureUI(prefix=workspace.name)
-    with _LOCK:
-        session.open_project(workspace, ui=ui, tools=[], system_prompt=_ESCAPED_PAGE_SYSTEM_PROMPT, resume=True)
-        ok = session.send(message)
-    if not ok or not ui.final_text.strip():
-        if ui.error_text:
-            _log.error("[%s] ask() failed: %s", workspace.name, ui.error_text)
+    full_messages = [*messages, {"role": "user", "content": user_message}]
+    try:
+        response = _get_client().messages.create(
+            model=get_model(), max_tokens=1000, system=PAGE_SYSTEM_PROMPT, messages=full_messages
+        )
+    except Exception:
+        _log.exception("%sask: the model call failed", tag)
         return "Sorry, I couldn't get an answer just now -- try again in a moment."
-    return ui.final_text.strip()
+    text = "".join(block.text for block in response.content if block.type == "text").strip()
+    return text or "Sorry, I couldn't get an answer just now -- try again in a moment."

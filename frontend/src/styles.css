@@ -75,7 +75,8 @@ main {
   font-size: 0.9rem;
 }
 
-.objective-form textarea {
+.objective-form textarea,
+.objective-form input {
   width: 100%;
   background: var(--bg);
   color: var(--text);
@@ -84,6 +85,8 @@ main {
   padding: 12px;
   font-size: 1rem;
   resize: vertical;
+  margin-bottom: 10px;
+  font-family: inherit;
 }
 
 .btn {

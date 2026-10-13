@@ -10,9 +10,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .routes import router
+from . import db
+from .routes import auth_router, learn_router
 
 app = FastAPI(title="LearnCode")
+
+
+@app.on_event("startup")
+def _create_tables() -> None:
+    db.init_db()
+
 
 # The Vite dev server runs on its own port and calls this API directly; harmless in production
 # where the backend serves the built SPA itself (same origin, so CORS is not even exercised).
@@ -23,7 +30,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router)
+app.include_router(auth_router)
+app.include_router(learn_router)
 
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 

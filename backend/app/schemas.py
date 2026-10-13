@@ -47,3 +47,25 @@ class AskRequest(BaseModel):
 
 class AskResponse(BaseModel):
     answer: str
+
+
+class DraftRequest(BaseModel):
+    """Autosaved in-progress code for one exercise, not yet submitted -- see db.Exercise.draft_code."""
+
+    exercise_id: str
+    code: str
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    token: str
+    email: str
