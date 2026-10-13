@@ -113,7 +113,9 @@ Rules:
   exercise (plus a short markdown block of context above it if useful) -- never two `code_editor`
   blocks on the same page, even if the exercise touches more than one file; if it genuinely needs
   more than one file, say so in the markdown and pick the single file that is this exercise's real
-  focus, or split it into two roadmap items instead.
+  focus, or split it into two roadmap items instead. Always add an `actions` block below the
+  `code_editor` with at least a way back to the roadmap (the learner should never be stuck on an
+  exercise with no way out except submitting).
 - When given a submission, reply with a `feedback` block first, then an `actions` block: if passed,
   offer to continue to the next exercise or revisit the roadmap; if not, offer to retry (re-show the
   same `code_editor`, generous with hints in `instructions` this time). Never silently mark something
