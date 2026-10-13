@@ -1,7 +1,7 @@
-"""The whole API: two actions (start a session, act on its current page) plus a page refetch. The
-backend does not know what a "roadmap" or an "exercise" is -- it only ever forwards a message to
-the agent and hands back whatever page JSON it returns; see agent.py's PAGE_SYSTEM_PROMPT for the
-page shape and action semantics."""
+"""The whole API: a pre-session clarification pass, starting a session, acting on its current page,
+and a page refetch. The backend does not know what a "roadmap" or an "exercise" is -- it only ever
+forwards a message to the agent and hands back whatever page JSON it returns; see agent.py's
+PAGE_SYSTEM_PROMPT for the page shape and action semantics."""
 
 from __future__ import annotations
 
@@ -11,9 +11,33 @@ from fastapi import APIRouter, HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from . import agent, store
-from .schemas import ActionRequest, AskRequest, AskResponse, PageResponse, StartRequest
+from .schemas import (
+    ActionRequest,
+    AskRequest,
+    AskResponse,
+    ClarifyRequest,
+    ClarifyResponse,
+    PageResponse,
+    StartRequest,
+)
 
 router = APIRouter(prefix="/api/learn")
+
+
+@router.post("/clarify", response_model=ClarifyResponse)
+async def clarify(body: ClarifyRequest) -> ClarifyResponse:
+    """Called before any session exists (no workspace, no seedagent project -- see agent.clarify's
+    docstring): decides whether the agent needs to ask one more question before a roadmap could be
+    designed well. The frontend keeps asking this, growing `history` itself, until ready is true,
+    then calls /start with the same objective and history."""
+    objective = body.objective.strip()
+    if not objective:
+        raise HTTPException(400, "objective must not be empty")
+    history = [{"question": t.question, "answer": t.answer} for t in body.history]
+    result = await run_in_threadpool(agent.clarify, objective, history)
+    if result["ready"]:
+        return ClarifyResponse(ready=True)
+    return ClarifyResponse(ready=False, question=result["question"])
 
 
 @router.post("/start", response_model=PageResponse)
@@ -23,7 +47,11 @@ async def start(body: StartRequest) -> PageResponse:
         raise HTTPException(400, "objective must not be empty")
     session_id = store.new_session_id()
     workspace = store.workspace_for(session_id)
-    message = f"Learning objective: {objective}\n\nPropose the project roadmap page."
+    parts = [f"Learning objective: {objective}"]
+    for turn in body.history:
+        parts.append(f"Clarifying Q: {turn.question}\nLearner's answer: {turn.answer}")
+    parts.append("Propose the project roadmap page.")
+    message = "\n\n".join(parts)
     page = await run_in_threadpool(agent.run_turn, workspace, message, False)
     store.save_last_page(session_id, page)
     return PageResponse(session_id=session_id, page=page)

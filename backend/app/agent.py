@@ -17,6 +17,7 @@ import threading
 from pathlib import Path
 
 from seedagent import session
+from seedagent.config import _get_client, get_model
 from seedagent.ui import UI
 
 PAGE_SYSTEM_PROMPT = """\
@@ -119,6 +120,56 @@ markdown prose, a few sentences to a short paragraph, referencing their actual c
 than generic advice. Give a hint, a nudge in the right direction, or an explanation of a concept --
 never the full solution code, unless they explicitly ask you to just give them the answer outright.
 """
+
+
+CLARIFY_SYSTEM_PROMPT = """\
+You help plan a project-based coding-practice exercise, before any exercises exist yet. Given a
+learner's stated objective, and any clarifying questions already asked and answered, decide: do you
+need to ask ONE more short, concrete question before you could design a genuinely good, focused
+project roadmap? Ask only when the objective is ambiguous in a way that would change what gets built
+-- no language or stack given and it matters, "a chat app" with very different reasonable readings,
+a scope so broad you'd otherwise have to guess at what matters most to them. Most objectives don't
+need this: when in doubt, don't ask -- you can make a reasonable assumption instead and mention it
+later when you design the roadmap.
+
+Reply with exactly one JSON object, nothing else:
+{"ready": true} -- you have enough to design a good roadmap now
+{"ready": false, "question": "..."} -- one short question, the next (and only the next) one to ask
+"""
+
+
+def clarify(objective: str, history: list[dict]) -> dict:
+    """A lightweight, stateless call -- seedagent's own Anthropic client and model (the same
+    get_model()/_get_client() its own session.check_connection() uses for a plain ping), but no
+    agent loop, no tools, no project workspace -- used before any seedagent "project" exists, to
+    decide whether to ask the learner one more clarifying question or hand off to run_turn to design
+    the roadmap. `history` is the growing list of {"question": str, "answer": str} already asked;
+    the caller (routes.py) keeps it (nothing this short-lived needs its own persisted conversation).
+    Returns {"ready": True} or {"ready": False, "question": str}; fails open to {"ready": True} if
+    the model's reply can't be read, so a hiccup here never blocks a learner from starting."""
+    parts = [f"Learning objective: {objective}"]
+    for turn in history:
+        parts.append(f"Q: {turn['question']}\nA: {turn['answer']}")
+    try:
+        response = _get_client().messages.create(
+            model=get_model(),
+            max_tokens=300,
+            system=CLARIFY_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": "\n\n".join(parts)}],
+        )
+    except Exception:
+        return {"ready": True}
+    text = "".join(block.text for block in response.content if block.type == "text")
+    try:
+        result = _extract_json(text)
+    except json.JSONDecodeError:
+        return {"ready": True}
+    if result.get("ready") is True:
+        return {"ready": True}
+    question = result.get("question")
+    if not isinstance(question, str) or not question.strip():
+        return {"ready": True}
+    return {"ready": False, "question": question.strip()}
 
 
 class CaptureUI(UI):

@@ -89,3 +89,13 @@ export interface PageResponse {
 export interface AskResponse {
   answer: string;
 }
+
+export interface ClarifyTurn {
+  question: string;
+  answer: string;
+}
+
+export interface ClarifyResponse {
+  ready: boolean;
+  question: string | null;
+}

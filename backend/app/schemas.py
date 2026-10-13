@@ -10,8 +10,24 @@ from typing import Any
 from pydantic import BaseModel
 
 
+class ClarifyTurn(BaseModel):
+    question: str
+    answer: str
+
+
+class ClarifyRequest(BaseModel):
+    objective: str
+    history: list[ClarifyTurn] = []
+
+
+class ClarifyResponse(BaseModel):
+    ready: bool
+    question: str | None = None
+
+
 class StartRequest(BaseModel):
     objective: str
+    history: list[ClarifyTurn] = []
 
 
 class ActionRequest(BaseModel):

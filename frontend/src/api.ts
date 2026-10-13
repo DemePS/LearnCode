@@ -1,4 +1,4 @@
-import type { AskResponse, PageResponse } from "./types";
+import type { AskResponse, ClarifyResponse, ClarifyTurn, PageResponse } from "./types";
 
 async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -10,11 +10,19 @@ async function asJson<T>(res: Response): Promise<T> {
 
 const asPageResponse = asJson<PageResponse>;
 
-export function startSession(objective: string): Promise<PageResponse> {
+export function clarify(objective: string, history: ClarifyTurn[]): Promise<ClarifyResponse> {
+  return fetch("/api/learn/clarify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ objective, history }),
+  }).then(asJson<ClarifyResponse>);
+}
+
+export function startSession(objective: string, history: ClarifyTurn[] = []): Promise<PageResponse> {
   return fetch("/api/learn/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ objective }),
+    body: JSON.stringify({ objective, history }),
   }).then(asPageResponse);
 }
 
