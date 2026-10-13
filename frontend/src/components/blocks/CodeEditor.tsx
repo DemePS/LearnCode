@@ -2,8 +2,9 @@ import Editor from "@monaco-editor/react";
 import { useState } from "react";
 import type { CodeEditorBlock } from "../../types";
 import { Md } from "../Md";
+import "../../monacoSetup"; // only loaded once this chunk is (see PageRenderer's React.lazy import of this file)
 
-export function CodeEditor({
+function CodeEditor({
   block,
   onAction,
   submitting,
@@ -48,3 +49,5 @@ export function CodeEditor({
     </div>
   );
 }
+
+export default CodeEditor; // React.lazy (PageRenderer) needs a default export

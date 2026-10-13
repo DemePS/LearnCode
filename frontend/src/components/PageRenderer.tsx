@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import type {
   ActionsBlock,
   Block,
@@ -9,11 +10,15 @@ import type {
   StatRowBlock,
 } from "../types";
 import { Actions } from "./blocks/Actions";
-import { CodeEditor } from "./blocks/CodeEditor";
 import { Feedback } from "./blocks/Feedback";
 import { Markdown } from "./blocks/Markdown";
 import { Roadmap } from "./blocks/Roadmap";
 import { StatRow } from "./blocks/StatRow";
+
+// Monaco (every language it ships, several MB) is the single biggest thing this app loads; code-
+// splitting it here means the objective form, roadmap and feedback pages stay fast, and the cost is
+// only paid once an exercise with a code_editor block actually renders.
+const CodeEditor = lazy(() => import("./blocks/CodeEditor"));
 
 type OnAction = (action: string, payload?: Record<string, unknown>) => void;
 
@@ -35,7 +40,9 @@ function renderBlock(block: Block, key: number, onAction: OnAction, submitting: 
       return <Roadmap key={key} block={block as RoadmapBlock} onAction={onAction} />;
     case "code_editor":
       return (
-        <CodeEditor key={key} block={block as CodeEditorBlock} onAction={onAction} submitting={submitting} />
+        <Suspense key={key} fallback={<div className="block block-code-editor-loading">Loading editor…</div>}>
+          <CodeEditor block={block as CodeEditorBlock} onAction={onAction} submitting={submitting} />
+        </Suspense>
       );
     case "feedback":
       return <Feedback key={key} block={block as FeedbackBlock} />;
