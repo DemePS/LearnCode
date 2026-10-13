@@ -1,17 +1,58 @@
-"""Dev-only helper: monkeypatches seedagent.session so the FastAPI app can run (and be
-browser-tested) without a live ANTHROPIC_API_KEY. Not part of the shipped app."""
+"""Dev-only helper: monkeypatches app.agent's Anthropic client so the FastAPI app can run (and be
+browser-tested) without a live ANTHROPIC_API_KEY. Not part of the shipped app.
+
+agent.py no longer goes through seedagent.session (see its module docstring), so there's no
+FakeSession to patch -- instead this stubs out the low-level pieces agent.py itself calls:
+_get_client() (the Anthropic client), get_model(), and clarify() (used before a project exists).
+"""
 
 import json
 
 from app import agent
 
 
-class FakeSession:
-    def open_project(self, workspace, ui, tools, system_prompt, resume):
-        self.ui = ui
+def fake_clarify(objective, history):
+    if not history:
+        return {"ready": False, "question": "Which language do you want to use?"}
+    return {"ready": True}
 
-    def send(self, message):
-        if "roadmap" in message.lower():
+
+class FakeMessages:
+    def create(self, **kwargs):
+        user_text = kwargs["messages"][-1]["content"]
+
+        if "open_ex1" in user_text:
+            page = {
+                "title": "Exercise 1: Data model",
+                "blocks": [
+                    {
+                        "type": "code_editor",
+                        "exercise_id": "ex1",
+                        "file_name": "models.py",
+                        "language": "python",
+                        "instructions": "Define a `Link` dataclass with `original_url: str` and `code: str`.",
+                        "starter_code": "from dataclasses import dataclass\n\n\nclass Link:\n    pass\n",
+                        "submit_action": "submit_ex1",
+                    },
+                ],
+            }
+        elif "submit_ex1" in user_text:
+            page = {
+                "title": "Feedback on exercise 1",
+                "blocks": [
+                    {
+                        "type": "feedback",
+                        "passed": True,
+                        "summary": "Looks good!",
+                        "details": "Your `Link` dataclass has the right fields.",
+                    },
+                    {
+                        "type": "actions",
+                        "items": [{"action": "open_ex2", "label": "Next exercise", "style": "primary"}],
+                    },
+                ],
+            }
+        else:
             page = {
                 "title": "Build a tiny URL shortener",
                 "subtitle": "A scaled-down version of shlink/shlink",
@@ -50,43 +91,14 @@ class FakeSession:
                     },
                 ],
             }
-        elif "open_ex1" in message:
-            page = {
-                "title": "Exercise 1: Data model",
-                "blocks": [
-                    {
-                        "type": "code_editor",
-                        "exercise_id": "ex1",
-                        "file_name": "models.py",
-                        "language": "python",
-                        "instructions": "Define a `Link` dataclass with `original_url: str` and `code: str`.",
-                        "starter_code": "from dataclasses import dataclass\n\n\nclass Link:\n    pass\n",
-                        "submit_action": "submit_ex1",
-                    },
-                ],
-            }
-        else:
-            page = {
-                "title": "Feedback on exercise 1",
-                "blocks": [
-                    {
-                        "type": "feedback",
-                        "passed": True,
-                        "summary": "Looks good!",
-                        "details": "Your `Link` dataclass has the right fields.",
-                    },
-                    {
-                        "type": "actions",
-                        "items": [{"action": "open_ex2", "label": "Next exercise", "style": "primary"}],
-                    },
-                ],
-            }
-        self.ui.assistant_start()
-        self.ui.assistant_text(json.dumps(page))
-        self.ui.response_end("end_turn")
-        return True
+
+        text = json.dumps(page)
+        block = type("Block", (), {"type": "text", "text": text})()
+        return type("Response", (), {"content": [block], "stop_reason": "end_turn"})()
 
 
-_fake = FakeSession()
-agent.session.open_project = _fake.open_project
-agent.session.send = _fake.send
+_fake_client = type("FakeClient", (), {"messages": FakeMessages()})()
+
+agent.clarify = fake_clarify
+agent._get_client = lambda: _fake_client
+agent.get_model = lambda: "claude-sonnet-5"

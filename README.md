@@ -24,12 +24,18 @@ conversation history. See `backend/app/agent.py`'s `PAGE_SYSTEM_PROMPT` for the 
   (`@monaco-editor/react`), bundled locally rather than loaded from Monaco's CDN (see
   `frontend/src/monacoSetup.ts`) so the app works offline / behind a restrictive proxy.
 - AI client: [`seedagent`](https://github.com/DemePS/CodeAgent) (`seedagent[browser,excel]`), the
-  engine from the sibling `CodeAgent` repository. Used here purely as a text generator: each
-  learning session is a seedagent "project" (its own folder under `backend/data/workspaces/`), given
-  `tools=[]` and the page-spec system prompt, so it never edits files -- it only ever replies with
-  page JSON. seedagent persists that project's conversation to disk, and the backend calls
-  `session.open_project(..., resume=True)` on every turn, so a stateless FastAPI process doesn't need
-  to keep chat history in memory itself.
+  engine from the sibling `CodeAgent` repository. Used here purely for its low-level Anthropic
+  client/model config (`seedagent.config._get_client()`/`get_model()`) -- `backend/app/agent.py`
+  makes its own stateless calls with the page-spec system prompt and never touches
+  `seedagent.session`/`seedagent.state`, so there's no shared process state to lock around and
+  requests for different (or the same) projects can run concurrently.
+- Persistence: SQLite via SQLAlchemy (`backend/app/db.py`) -- Users, Projects, the conversation
+  history (`Message`, replacing any on-disk conversation file), Exercises (including an autosaved
+  `draft_code` for unsubmitted work) and Submissions. The agent's page JSON is parsed into these rows
+  on every turn (`backend/app/crud.py`); the raw page is cached only for a fast reload, never treated
+  as the source of truth.
+- Auth: email + password (bcrypt + JWT bearer tokens, `backend/app/auth.py`). Every `/api/learn/*`
+  route requires a valid token and is scoped to the signed-in user's own projects.
 
 ## Running it
 
@@ -37,6 +43,9 @@ conversation history. See `backend/app/agent.py`'s `PAGE_SYSTEM_PROMPT` for the 
 cd backend
 uv sync
 export ANTHROPIC_API_KEY=sk-ant-...        # or ANTHROPIC_FOUNDRY_*, or DEEPSEEK_API_KEY -- see CodeAgent's README
+export LEARNCODE_SECRET_KEY=$(openssl rand -hex 32)   # signs auth tokens; set a fixed value or every restart invalidates existing logins
+# optional: LEARNCODE_DATABASE_URL (defaults to a local sqlite file under LEARNCODE_DATA_DIR/learncode.db)
+# optional: LEARNCODE_DATA_DIR (defaults to backend/data)
 uv run uvicorn app.main:app --reload
 ```
 
@@ -53,8 +62,8 @@ the frontend (`npm run build`) and the backend serves `frontend/dist` itself at 
 
 ### Testing without a live API key
 
-`backend/_mock_agent_server.py` monkeypatches `seedagent.session` with canned responses, so the
-whole app (API + real browser UI) can be exercised with no model calls at all:
+`backend/_mock_agent_server.py` monkeypatches `app.agent`'s Anthropic client with canned responses,
+so the whole app (API + real browser UI) can be exercised with no model calls at all:
 
 ```bash
 cd backend
@@ -65,25 +74,34 @@ then point the frontend (or a browser) at `http://127.0.0.1:8123/`.
 
 ## API
 
-- `POST /api/learn/start {objective}` -> `{session_id, page}` -- starts a new session and asks the
-  agent for the initial roadmap page.
+- `POST /api/auth/register {email, password}` / `POST /api/auth/login {email, password}` ->
+  `{token, email}` -- every other route below requires `Authorization: Bearer <token>`.
+- `POST /api/learn/clarify {objective, history}` -> `{ready, question?}` -- asks whether one more
+  clarifying question is needed before a roadmap can be designed.
+- `POST /api/learn/start {objective, history}` -> `{session_id, page}` -- creates a new project and
+  asks the agent for the initial roadmap page. (`session_id` is the project's id -- the field name is
+  kept for frontend continuity.)
 - `POST /api/learn/{session_id}/action {action, payload}` -> `{session_id, page}` -- sends an
-  action (a button click, or an exercise submission) back to the agent and returns the next page.
+  action (a button click, or an exercise submission) back to the agent, persists the turn and any
+  resulting exercise/submission rows, and returns the next page.
 - `GET /api/learn/{session_id}` -> `{session_id, page}` -- refetches the last rendered page (for a
   browser refresh) without calling the agent again.
+- `POST /api/learn/{session_id}/draft {exercise_id, code}` -> `{ok}` -- autosaves in-progress,
+  unsubmitted code (debounced on the frontend); no agent call.
+- `POST /api/learn/{session_id}/ask {question, context}` -> `{answer}` -- the floating help widget's
+  side channel; answered with full project context but not persisted into the conversation.
 
 ## Limitations
 
-- **Concurrency.** seedagent keeps its state (`seedagent.state`, `seedagent.session.messages`) in
-  module-level globals, by design for a single interactive CLI session (see CodeAgent's `CLAUDE.md`,
-  "concurrency" section). `backend/app/agent.py` serializes every call with a lock, so two learners'
-  requests never interleave -- correct, but requests queue up one at a time. Fine for a practice app;
-  would need seedagent's own concurrency work (or running one seedagent process per session) to scale.
-- **No live end-to-end test yet.** Everything above was tested with `seedagent.session` mocked (unit
+- **No live end-to-end test yet.** Everything above was tested with a mocked Anthropic client (unit
   tests) and with the mock server driving a real browser (Playwright) -- confirming the wiring, the
-  page-spec contract, and the UI all work. Nobody has yet confirmed that a real model call reliably
-  follows the page-spec format and grounds its roadmap in an actual GitHub repo as instructed; that
-  needs a real `ANTHROPIC_API_KEY` run.
+  page-spec contract, auth, persistence, and the UI all work. Nobody has yet confirmed that a real
+  model call reliably follows the page-spec format and grounds its roadmap in an actual GitHub repo
+  as instructed; that needs a real `ANTHROPIC_API_KEY` run.
+- **`LEARNCODE_SECRET_KEY`.** If unset, falls back to a key generated at process start, so every
+  restart invalidates existing login tokens. Set it explicitly for anything beyond local dev.
+- SQLite is a local file (`LEARNCODE_DATABASE_URL` can point elsewhere, e.g. Postgres, but nothing
+  does by default) -- won't survive a redeploy or scale past one instance as configured.
 - Monaco's web worker (used for background tokenization) failed to start in at least one sandboxed
   headless-browser environment this was tested in, and Monaco fell back to main-thread tokenization;
   editing still worked. Worth rechecking in a normal browser.
