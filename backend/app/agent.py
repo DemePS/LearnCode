@@ -219,12 +219,19 @@ class CaptureUI(UI):
     session.send() fails, seedagent's loop calls state.ui.error(explanation) with the real reason
     (an auth problem, a rate limit, a context-window overflow, a network error...) right before
     returning False -- the base UI.error() does nothing with it by default, which silently turned
-    every real failure into run_turn's generic, undiagnosable "The agent did not answer.\""""
+    every real failure into run_turn's generic, undiagnosable "The agent did not answer."
 
-    def __init__(self) -> None:
+    Also logs everything seedagent reports along the way -- tool calls (there are none today, since
+    run_turn passes tools=[], but this is ready for when that changes), status lines, thinking
+    markers, and how each turn actually ended (response_end's stop_reason) -- none of which was
+    visible anywhere before. `_prefix` (a short per-call tag, e.g. the session id) keeps concurrent
+    turns' log lines distinguishable from each other, since this app runs several sessions at once."""
+
+    def __init__(self, prefix: str = "") -> None:
         self._buffer = ""
         self.final_text = ""
         self.error_text: str | None = None
+        self._prefix = f"[{prefix}] " if prefix else ""
 
     def confirm(self, question: str, choices: tuple[str, ...] = ("yes", "no")) -> str:
         return "no" if "no" in choices else choices[-1]
@@ -234,7 +241,28 @@ class CaptureUI(UI):
 
     def error(self, text: str) -> None:
         self.error_text = text
-        _log.error("seedagent reported: %s", text)
+        _log.error("%sseedagent error: %s", self._prefix, text)
+
+    def status(self, text: str) -> None:
+        _log.info("%s%s", self._prefix, text)
+
+    def message(self, text: str) -> None:
+        _log.info("%s%s", self._prefix, text)
+
+    def warning(self, text: str) -> None:
+        _log.warning("%s%s", self._prefix, text)
+
+    def thinking(self) -> None:
+        _log.debug("%sthinking...", self._prefix)
+
+    def tool_start(self, name: str) -> None:
+        _log.info("%s-> tool: %s", self._prefix, name)
+
+    def tool_detail(self, text: str) -> None:
+        _log.debug("%s   args: %s", self._prefix, text)
+
+    def tool_result(self, name: str, arguments: str, ok: bool, summary: str) -> None:
+        _log.info("%s<- tool: %s %s: %s", self._prefix, name, "ok" if ok else "FAILED", summary)
 
     def assistant_start(self) -> None:
         pass
@@ -243,6 +271,7 @@ class CaptureUI(UI):
         self._buffer += text
 
     def response_end(self, stop_reason: str | None) -> None:
+        _log.info("%sturn ended: stop_reason=%s, %d chars written", self._prefix, stop_reason, len(self._buffer))
         if stop_reason == "end_turn":
             self.final_text = self._buffer
         self._buffer = ""
@@ -257,7 +286,19 @@ _ESCAPED_PAGE_SYSTEM_PROMPT = PAGE_SYSTEM_PROMPT.replace("{", "{{").replace("}",
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 _LOCK = threading.Lock()
+
 _log = logging.getLogger(__name__)
+_log.setLevel(logging.INFO)
+if not _log.handlers:
+    # A dedicated handler, not logging.basicConfig(): uvicorn configures the root logger's handlers
+    # itself (for its own access/error logs), and basicConfig() is a no-op once that's happened --
+    # so relying on it would make whether these lines appear at all depend on import order. This
+    # guarantees CaptureUI's tool/status/error trace (see its docstring) always reaches stderr,
+    # regardless of whatever the rest of the process does with logging.
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    _log.addHandler(_handler)
+    _log.propagate = False
 
 # Wording alone ("vary what you build") doesn't reliably stop a model from converging on the same
 # single "obvious" project for a given theme -- a learner reported exactly that (same theme, same
@@ -318,7 +359,7 @@ def _error_page(detail: str) -> dict:
 def run_turn(workspace: Path, message: str, resume: bool) -> dict:
     """Run one instruction in this session's project and return the resulting Page (a dict). Blocks
     the calling thread while the model answers; call it from a worker thread in async code."""
-    ui = CaptureUI()
+    ui = CaptureUI(prefix=workspace.name)
     with _LOCK:
         session.open_project(workspace, ui=ui, tools=[], system_prompt=_ESCAPED_PAGE_SYSTEM_PROMPT, resume=resume)
         ok = session.send(message)
@@ -345,10 +386,12 @@ def ask(workspace: Path, question: str, context: dict) -> str:
         f"Question: {question}\n\n"
         f"Context (their current exercise/code, if any): {json.dumps(context)}"
     )
-    ui = CaptureUI()
+    ui = CaptureUI(prefix=workspace.name)
     with _LOCK:
         session.open_project(workspace, ui=ui, tools=[], system_prompt=_ESCAPED_PAGE_SYSTEM_PROMPT, resume=True)
         ok = session.send(message)
     if not ok or not ui.final_text.strip():
+        if ui.error_text:
+            _log.error("[%s] ask() failed: %s", workspace.name, ui.error_text)
         return "Sorry, I couldn't get an answer just now -- try again in a moment."
     return ui.final_text.strip()
