@@ -134,11 +134,20 @@ CLARIFY_SYSTEM_PROMPT = """\
 You help plan a project-based coding-practice exercise, before any exercises exist yet. Given a
 learner's stated objective, and any clarifying questions already asked and answered, decide: do you
 need to ask ONE more short, concrete question before you could design a genuinely good, focused
-project roadmap? Ask only when the objective is ambiguous in a way that would change what gets built
--- no language or stack given and it matters, "a chat app" with very different reasonable readings,
-a scope so broad you'd otherwise have to guess at what matters most to them. Most objectives don't
-need this: when in doubt, don't ask -- you can make a reasonable assumption instead and mention it
-later when you design the roadmap.
+project roadmap?
+
+Programming language is a near-default question, not a judgment call: the learner is about to write
+real code, in a real editor, in whatever language you pick -- getting it wrong wastes their first
+exercise. If the objective does not already name or unambiguously imply a single language (naming a
+language-specific tool or ecosystem counts as unambiguous -- "learn Django" implies Python; "a chat
+app" does not), ask which language they want to use, before any other question. Only skip asking
+when it's already unambiguous.
+
+Beyond language, ask only when something else is ambiguous in a way that would change what gets
+built -- "a chat app" with very different reasonable readings, a scope so broad you'd otherwise have
+to guess at what matters most to them. Most objectives don't need a second question: when in doubt,
+don't ask it -- make a reasonable assumption instead and mention it later when you design the
+roadmap.
 
 Reply with exactly one JSON object, nothing else:
 {"ready": true} -- you have enough to design a good roadmap now
@@ -244,16 +253,23 @@ def variety_hint() -> str:
     return f"(Variety seed: {seed}. Lean toward: {angle}.)"
 
 
+_JSON_DECODER = json.JSONDecoder()
+
+
 def _extract_json(text: str) -> dict:
+    """Parse the one page-spec JSON object out of the model's reply. Deliberately not `rfind("}")`
+    to find the end: a page's markdown content is itself likely to contain literal braces (Jinja's
+    `{{ ref() }}`, a Python dict in an example, JSON in a code block...), which broke a real reply
+    with "Extra data" at the brace *inside* the content, nowhere near the actual end of the object.
+    `raw_decode` is a real JSON parser: it reads one complete value starting at `start` and tells us
+    exactly where it ended, so trailing text the model added after the object (despite being told
+    not to) is correctly ignored instead of corrupting the parse."""
     cleaned = _FENCE_RE.sub("", text).strip()
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        first_error = e
-    start, end = cleaned.find("{"), cleaned.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return json.loads(cleaned[start:end + 1])
-    raise first_error
+    start = cleaned.find("{")
+    if start == -1:
+        raise json.JSONDecodeError("No '{' found in the reply", cleaned, 0)
+    obj, _ = _JSON_DECODER.raw_decode(cleaned, start)
+    return obj
 
 
 def _error_page(detail: str) -> dict:
