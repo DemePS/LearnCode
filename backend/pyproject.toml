@@ -8,7 +8,7 @@ dependencies = [
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.30,<1",
     "pydantic>=2.7,<3",
-    "seedagent[browser,excel]>=1.1.1,<2",
+    "seedagent[browser,excel]",
 ]
 
 [dependency-groups]
