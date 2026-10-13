@@ -189,6 +189,23 @@ main {
   font-weight: 600;
 }
 
+.roadmap-peek {
+  grid-column: 2;
+  justify-self: start;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 0.78rem;
+  padding: 3px 10px;
+  margin-top: 4px;
+  cursor: pointer;
+}
+
+.roadmap-peek:hover {
+  border-color: var(--accent);
+}
+
 .roadmap-summary {
   color: var(--muted);
   font-size: 0.88rem;

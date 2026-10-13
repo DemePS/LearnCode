@@ -18,6 +18,7 @@ export function Roadmap({
     <ol className="block block-roadmap">
       {block.items.map((item) => {
         const clickable = item.status !== "locked";
+        const canPeek = item.status === "locked" && !!item.preview_action;
         return (
           <li
             key={item.id}
@@ -29,6 +30,17 @@ export function Roadmap({
             <span className="roadmap-status">{STATUS_LABEL[item.status] ?? item.status}</span>
             <span className="roadmap-title">{item.title}</span>
             <span className="roadmap-summary">{item.summary}</span>
+            {canPeek && (
+              <button
+                className="roadmap-peek"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAction(item.preview_action!);
+                }}
+              >
+                Peek ahead
+              </button>
+            )}
           </li>
         );
       })}

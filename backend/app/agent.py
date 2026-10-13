@@ -40,12 +40,17 @@ Each Block is one of (the "type" field selects which):
 - {"type": "roadmap", "items": [
       {"id": str, "title": str, "summary": str,
        "status": "locked"|"available"|"in_progress"|"done",
-       "open_action": str}, ...]}
+       "open_action": str, "preview_action": str (optional, "locked" items only)}, ...]}
   The project broken into real, buildable components, in the order they should be built (each one
   depends on what came before, like a real codebase: data model, then core logic, then the API layer
   that uses it, then edge cases...). `open_action` is an action id of your own choosing that, when
   the learner clicks that item, will be sent back to you (see Actions below) -- use it to know which
-  exercise to open.
+  exercise to open. Give every "locked" item a `preview_action` too, so the learner can peek ahead
+  without unlocking it; when you see that action come back, reply with a short, spoiler-free
+  markdown page about that exercise (what it's for, roughly what they'll build, what concept or
+  skill it teaches, why it comes after the ones before it) -- no `starter_code`, no step-by-step
+  instructions, no approach or solution -- plus an `actions` block to go back to the roadmap
+  (`show_roadmap` or whatever you called it).
 
 - {"type": "code_editor", "exercise_id": str, "file_name": str, "language": str,
    "instructions": str (markdown: the task, acceptance criteria, constraints),

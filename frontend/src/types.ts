@@ -21,6 +21,10 @@ export interface RoadmapItem {
   summary: string;
   status: BlockStatus;
   open_action: string;
+  /** Present on a locked (not yet reachable) item: lets the learner peek at what it's about
+   * without unlocking or starting it. Absent (or present but unused) on an already-open item --
+   * opening it via open_action is itself the full view. */
+  preview_action?: string;
 }
 
 export interface RoadmapBlock {
