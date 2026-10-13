@@ -44,6 +44,12 @@ body {
   letter-spacing: 0.02em;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 main {
   max-width: 840px;
   margin: 0 auto;

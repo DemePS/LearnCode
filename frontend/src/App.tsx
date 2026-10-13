@@ -6,6 +6,9 @@ import { QuestionPrompt } from "./components/QuestionPrompt";
 import type { ClarifyTurn, Page } from "./types";
 
 const SESSION_STORAGE_KEY = "learncode.session_id";
+// Reserved action id the frontend's own "Back to roadmap" button always sends, regardless of what
+// action ids the agent invented for its own buttons on the current page (see PAGE_SYSTEM_PROMPT).
+const SHOW_ROADMAP_ACTION = "show_roadmap";
 
 function App() {
   const [sessionId, setSessionId] = useState<string | null>(() =>
@@ -142,13 +145,27 @@ function App() {
     );
   }
 
+  // "Back to roadmap" is a frontend-owned control, not something the agent has to remember to add
+  // to its own actions block -- that was fragile (the agent sometimes left it off a page entirely,
+  // deterministically, not just occasionally). It's hidden only when the current page already shows
+  // the roadmap itself, and always sends the same reserved action id (see PAGE_SYSTEM_PROMPT) no
+  // matter what action ids the agent invented for its own buttons on this page.
+  const onRoadmap = page.blocks.some((b) => b.type === "roadmap");
+
   return (
     <div className="shell">
       <header className="topbar">
         <span className="brand">LearnCode</span>
-        <button className="btn btn-link" onClick={startOver}>
-          Start a new project
-        </button>
+        <div className="topbar-actions">
+          {!onRoadmap && (
+            <button className="btn btn-link" onClick={() => handleAction(SHOW_ROADMAP_ACTION)} disabled={loading}>
+              Back to roadmap
+            </button>
+          )}
+          <button className="btn btn-link" onClick={startOver}>
+            Start a new project
+          </button>
+        </div>
       </header>
       <main>
         {error && <p className="error">{error}</p>}
