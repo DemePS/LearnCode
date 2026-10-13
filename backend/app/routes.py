@@ -9,6 +9,7 @@ other users' project ids)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -32,6 +33,21 @@ from .schemas import (
 
 auth_router = APIRouter(prefix="/api/auth")
 learn_router = APIRouter(prefix="/api/learn")
+
+# One lock per project (keyed by the same id the API calls session_id), not one lock for the whole
+# app: two requests for *different* projects never wait on each other, only two requests racing to
+# mutate the *same* project's conversation/exercises do (see CLAUDE.md's "concurrency" write-up --
+# agent.py removed the old global lock by not sharing any state across calls, but load_messages ->
+# run_turn -> append_turn is still a read-then-write against the database, and two concurrent calls
+# for one project could otherwise both read the same "last message" and then both append next,
+# producing colliding seq numbers and a last_page that doesn't reflect the later of the two actions).
+# dict.setdefault is a single bytecode-level dict op, so this is safe without its own lock under
+# the GIL; the lock objects themselves (one per project, forever) are the one acceptable leak here.
+_project_locks: dict[str, asyncio.Lock] = {}
+
+
+def _lock_for(project_id: str) -> asyncio.Lock:
+    return _project_locks.setdefault(project_id, asyncio.Lock())
 
 
 @auth_router.post("/register", response_model=TokenResponse)
@@ -127,29 +143,35 @@ async def act(
         f"{json.dumps(body.payload)}\n\n"
         "Continue the experience and return the next page JSON."
     )
-    messages = crud.load_messages(session, project)
-    page, assistant_text = await run_in_threadpool(agent.run_turn, messages, message, project.id)
-    crud.append_turn(session, project, message, assistant_text)
-    crud.sync_exercises_from_page(session, project, page)
+    # Everything from here on reads the conversation and then writes it back (append_turn computes
+    # the next seq from the current max) -- held for this project only, so a second action for this
+    # same project waits its turn instead of racing, while actions on every other project are
+    # untouched.
+    async with _lock_for(project.id):
+        messages = crud.load_messages(session, project)
+        page, assistant_text = await run_in_threadpool(agent.run_turn, messages, message, project.id)
+        crud.append_turn(session, project, message, assistant_text)
+        crud.sync_exercises_from_page(session, project, page)
 
-    # A submission: the payload carries exercise_id + code, and the response opens with feedback --
-    # record it as a graded Submission. exercise_id comes from the request (not the response: the
-    # feedback block itself doesn't carry one, but it's unambiguous within a single HTTP call).
-    blocks = page.get("blocks", [])
-    if "exercise_id" in body.payload and "code" in body.payload and blocks and blocks[0].get("type") == "feedback":
-        fb = blocks[0]
-        crud.record_submission(
-            session,
-            project,
-            body.payload["exercise_id"],
-            body.payload["code"],
-            bool(fb.get("passed")),
-            fb.get("summary", ""),
-            fb.get("details", ""),
-        )
+        # A submission: the payload carries exercise_id + code, and the response opens with feedback
+        # -- record it as a graded Submission. exercise_id comes from the request (not the response:
+        # the feedback block itself doesn't carry one, but it's unambiguous within a single HTTP
+        # call).
+        blocks = page.get("blocks", [])
+        if "exercise_id" in body.payload and "code" in body.payload and blocks and blocks[0].get("type") == "feedback":
+            fb = blocks[0]
+            crud.record_submission(
+                session,
+                project,
+                body.payload["exercise_id"],
+                body.payload["code"],
+                bool(fb.get("passed")),
+                fb.get("summary", ""),
+                fb.get("details", ""),
+            )
 
-    page = crud.apply_saved_draft(session, project, page)
-    crud.save_last_page(session, project, page)
+        page = crud.apply_saved_draft(session, project, page)
+        crud.save_last_page(session, project, page)
     return PageResponse(session_id=project.id, page=page)
 
 
@@ -163,7 +185,11 @@ async def save_draft(
     """Autosave only -- see db.Exercise.draft_code. Called often (debounced on the frontend), so it
     deliberately does nothing expensive: no agent call, just one row update."""
     project = _project_or_404(session, project_id, user)
-    crud.save_draft(session, project, body.exercise_id, body.code)
+    # Same lock as /action: record_submission also writes exercise.draft_code (to keep it in sync
+    # with the latest submission), so an autosave landing mid-submit could otherwise overwrite that
+    # with stale editor contents, or vice versa.
+    async with _lock_for(project.id):
+        crud.save_draft(session, project, body.exercise_id, body.code)
     return {"ok": True}
 
 
