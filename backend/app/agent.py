@@ -12,6 +12,7 @@ practice app, not for high concurrency (see README "Limitations").
 from __future__ import annotations
 
 import json
+import random
 import re
 import threading
 from pathlib import Path
@@ -81,19 +82,26 @@ Rules:
 - Ground the project in a real piece of open-source software on GitHub that matches the learner's
   objective -- not a generic invented toy. Default to having the learner **use the real tool as a
   real dependency and build something with it**, not reimplement the tool's own internals: someone
-  learning Flask installs and imports the real `flask` package and builds a real small app with it
-  (routes, templates, a database); someone learning Redis runs real Redis and writes a real client
-  against it; someone learning Git's internals writes code that shells out to or calls a real `git`.
-  Pick a real, well-known open-source *application* (or a realistic one modeled closely on one) that
-  is itself a genuine, idiomatic user of the framework/library/tool the objective names -- name both
-  the tool and, where relevant, an example real project that uses it well (e.g. "we'll build a link
-  shortener using real Flask and SQLAlchemy, in the style of how miguelgrinberg/flasky structures a
-  Flask app") -- and base the roadmap's components on how a real application built with that tool is
-  actually structured (its real layering: models, routes/handlers, services, config), not on the
-  tool's own source tree. Only build a scaled-down clone of the tool's own internals (a mini web
-  framework, a mini key-value store, a mini git) when the learner's stated objective is itself about
-  that -- "learn how web frameworks work by building one", "understand how Redis works internally",
-  and the like -- and say so explicitly when that's why you chose that shape.
+  learning a web framework installs and imports the real package and builds a real small app with it
+  (routes, templates, a database); someone learning a database runs the real thing and writes a real
+  client against it; someone learning a VCS's internals writes code that shells out to or calls the
+  real CLI. Pick a real, well-known open-source *application* (or a realistic one modeled closely on
+  one) that is itself a genuine, idiomatic user of the tool the objective names -- name both the tool
+  and, where it helps, a real project that uses it well -- and base the roadmap's components on how a
+  real application built with that tool is actually structured (its real layering: models,
+  routes/handlers, services, config), not on the tool's own source tree. Only build a scaled-down
+  clone of the tool's own internals (a mini web framework, a mini key-value store, a mini git) when
+  the learner's stated objective is itself about that -- "learn how web frameworks work by building
+  one", "understand how a database works internally", and the like -- and say so explicitly when
+  that's why you chose that shape.
+- Vary what you build. The same or a similar objective, asked by different learners (or asked again),
+  should not keep landing on the same single "obvious" project -- genuinely consider a few different
+  real applications that would exercise the objective well (different domains, different scales,
+  different angles on the same tool) before picking one, and actively avoid defaulting to whichever
+  example is most clichéd or most likely to be the very first thing that comes to mind for that
+  theme. Let this session's own variety seed (given in the learner's message, if any) nudge which of
+  several good candidates you land on -- it's there to help you pick differently, not to be mentioned
+  to the learner or to override fit with their actual objective.
 - Exercises must compose one real, coherent project toward the learner's stated objective -- not a
   grab-bag of unrelated LeetCode-style puzzles. Think "build this product, one component at a time."
   Each exercise should be completable in 10-40 minutes of focused coding.
@@ -208,6 +216,32 @@ _ESCAPED_PAGE_SYSTEM_PROMPT = PAGE_SYSTEM_PROMPT.replace("{", "{{").replace("}",
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 _LOCK = threading.Lock()
+
+# Wording alone ("vary what you build") doesn't reliably stop a model from converging on the same
+# single "obvious" project for a given theme -- a learner reported exactly that (same theme, same
+# roadmap, every time). Pairing the instruction with an actual per-call random seed and a concrete
+# random angle gives the sampling something real to condition on, which is much more effective than
+# an instruction alone. Used only when designing the initial roadmap (variety_hint(), called from
+# routes.py's /start) -- later turns (opening an exercise, grading a submission) don't need it.
+_VARIETY_ANGLES = [
+    "a personal/indie tool a solo developer would build for themselves",
+    "a small internal tool a team would build for their own workflow",
+    "an unusual or less typical domain for this theme, not the first example that comes to mind",
+    "a creative or playful take rather than the most businesslike one",
+    "a tool for a specific niche audience rather than a generic one",
+    "something data- or content-heavy rather than CRUD-heavy",
+    "a tool that automates a tedious manual task",
+    "something aimed at hobbyists or a specific community",
+]
+
+
+def variety_hint() -> str:
+    """A line to append to the message that kicks off a new roadmap, so repeated or similar
+    objectives don't keep landing on the same project (see the "Vary what you build" rule in
+    PAGE_SYSTEM_PROMPT, which tells the model how to use this)."""
+    seed = random.randint(1000, 9999)
+    angle = random.choice(_VARIETY_ANGLES)
+    return f"(Variety seed: {seed}. Lean toward: {angle}.)"
 
 
 def _extract_json(text: str) -> dict:

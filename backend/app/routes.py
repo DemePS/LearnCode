@@ -50,7 +50,7 @@ async def start(body: StartRequest) -> PageResponse:
     parts = [f"Learning objective: {objective}"]
     for turn in body.history:
         parts.append(f"Clarifying Q: {turn.question}\nLearner's answer: {turn.answer}")
-    parts.append("Propose the project roadmap page.")
+    parts.append(f"Propose the project roadmap page. {agent.variety_hint()}")
     message = "\n\n".join(parts)
     page = await run_in_threadpool(agent.run_turn, workspace, message, False)
     store.save_last_page(session_id, page)
