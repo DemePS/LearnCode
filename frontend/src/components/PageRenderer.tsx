@@ -68,6 +68,22 @@ function renderBlock(
   }
 }
 
+/** PAGE_SYSTEM_PROMPT tells the agent to send at most one code_editor block per page, but that's a
+ * request to a model, not a guarantee -- it can still get it wrong. Drop every code_editor after
+ * the first so the UI can never show two, regardless of what the agent actually sent. */
+function dedupeCodeEditors(blocks: Block[]): Block[] {
+  let seenCodeEditor = false;
+  return blocks.filter((block) => {
+    if (block.type !== "code_editor") return true;
+    if (seenCodeEditor) {
+      console.warn("PageRenderer: dropping an extra code_editor block (the page had more than one)", block);
+      return false;
+    }
+    seenCodeEditor = true;
+    return true;
+  });
+}
+
 export function PageRenderer({
   page,
   onAction,
@@ -87,7 +103,7 @@ export function PageRenderer({
     <div className="page">
       <h1>{page.title}</h1>
       {page.subtitle && <p className="page-subtitle">{page.subtitle}</p>}
-      {page.blocks.map((block, i) => renderBlock(block, i, onAction, submitting, onCodeChange))}
+      {dedupeCodeEditors(page.blocks).map((block, i) => renderBlock(block, i, onAction, submitting, onCodeChange))}
     </div>
   );
 }
