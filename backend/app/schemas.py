@@ -22,3 +22,12 @@ class ActionRequest(BaseModel):
 class PageResponse(BaseModel):
     session_id: str
     page: dict[str, Any]
+
+
+class AskRequest(BaseModel):
+    question: str
+    context: dict[str, Any] = {}
+
+
+class AskResponse(BaseModel):
+    answer: str

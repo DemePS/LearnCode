@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from . import agent, store
-from .schemas import ActionRequest, PageResponse, StartRequest
+from .schemas import ActionRequest, AskRequest, AskResponse, PageResponse, StartRequest
 
 router = APIRouter(prefix="/api/learn")
 
@@ -55,3 +55,17 @@ async def act(session_id: str, body: ActionRequest) -> PageResponse:
     page = await run_in_threadpool(agent.run_turn, workspace, message, True)
     store.save_last_page(session_id, page)
     return PageResponse(session_id=session_id, page=page)
+
+
+@router.post("/{session_id}/ask", response_model=AskResponse)
+async def ask(session_id: str, body: AskRequest) -> AskResponse:
+    """The floating help widget: unlike /action, this never touches the session's last_page --
+    the answer is shown alongside whatever page is already on screen, not in place of it."""
+    if not store.session_exists(session_id):
+        raise HTTPException(404, "No such session")
+    question = body.question.strip()
+    if not question:
+        raise HTTPException(400, "question must not be empty")
+    workspace = store.workspace_for(session_id)
+    answer = await run_in_threadpool(agent.ask, workspace, question, body.context)
+    return AskResponse(answer=answer)

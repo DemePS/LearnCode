@@ -21,6 +21,7 @@ import { StatRow } from "./blocks/StatRow";
 const CodeEditor = lazy(() => import("./blocks/CodeEditor"));
 
 type OnAction = (action: string, payload?: Record<string, unknown>) => void;
+type OnCodeChange = (exerciseId: string, fileName: string, code: string) => void;
 
 /** The entire UI, past the objective form, is this one switch: whatever block types the agent's
  * page JSON contains get rendered, in order. There is no per-screen React component -- a "roadmap
@@ -30,7 +31,13 @@ type OnAction = (action: string, payload?: Record<string, unknown>) => void;
  * decided the shape at runtime (this is JSON from the model, not a statically-checked value), so
  * each case trusts it rather than re-deriving a narrowing TypeScript can't express for a mixed
  * literal/non-literal discriminated union. */
-function renderBlock(block: Block, key: number, onAction: OnAction, submitting: boolean) {
+function renderBlock(
+  block: Block,
+  key: number,
+  onAction: OnAction,
+  submitting: boolean,
+  onCodeChange: OnCodeChange,
+) {
   switch (block.type) {
     case "markdown":
       return <Markdown key={key} block={block as MarkdownBlock} />;
@@ -38,12 +45,20 @@ function renderBlock(block: Block, key: number, onAction: OnAction, submitting: 
       return <StatRow key={key} block={block as StatRowBlock} />;
     case "roadmap":
       return <Roadmap key={key} block={block as RoadmapBlock} onAction={onAction} />;
-    case "code_editor":
+    case "code_editor": {
+      const codeBlock = block as CodeEditorBlock;
       return (
-        <Suspense key={key} fallback={<div className="block block-code-editor-loading">Loading editor…</div>}>
-          <CodeEditor block={block as CodeEditorBlock} onAction={onAction} submitting={submitting} />
+        // Keyed on exercise_id (not just the block's array index) so opening a different exercise
+        // remounts the editor and resets to its own starter_code, instead of keeping whatever the
+        // learner was typing for the previous one at the same position in the page.
+        <Suspense
+          key={`code-${codeBlock.exercise_id}`}
+          fallback={<div className="block block-code-editor-loading">Loading editor…</div>}
+        >
+          <CodeEditor block={codeBlock} onAction={onAction} submitting={submitting} onCodeChange={onCodeChange} />
         </Suspense>
       );
+    }
     case "feedback":
       return <Feedback key={key} block={block as FeedbackBlock} />;
     case "actions":
@@ -57,16 +72,22 @@ export function PageRenderer({
   page,
   onAction,
   submitting,
+  onCodeChange = () => {},
 }: {
   page: Page;
   onAction: OnAction;
   submitting: boolean;
+  /** Fires on every keystroke in a code_editor block, so a parent (the floating help widget) can
+   * give hints grounded in what the learner is actually typing right now -- not just the starter
+   * code from the last page the agent sent. Optional: a caller that doesn't need live code (e.g. a
+   * future embed of this renderer) can omit it. */
+  onCodeChange?: OnCodeChange;
 }) {
   return (
     <div className="page">
       <h1>{page.title}</h1>
       {page.subtitle && <p className="page-subtitle">{page.subtitle}</p>}
-      {page.blocks.map((block, i) => renderBlock(block, i, onAction, submitting))}
+      {page.blocks.map((block, i) => renderBlock(block, i, onAction, submitting, onCodeChange))}
     </div>
   );
 }

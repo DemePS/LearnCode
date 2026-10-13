@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getSession, sendAction, startSession } from "./api";
+import { AskAI } from "./components/AskAI";
 import { PageRenderer } from "./components/PageRenderer";
 import type { Page } from "./types";
 
@@ -14,6 +15,9 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resuming, setResuming] = useState(sessionId !== null);
+  const [currentCode, setCurrentCode] = useState<{ exerciseId: string; fileName: string; code: string } | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!resuming || !sessionId) return;
@@ -37,6 +41,7 @@ function App() {
       localStorage.setItem(SESSION_STORAGE_KEY, res.session_id);
       setSessionId(res.session_id);
       setPage(res.page);
+      setCurrentCode(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -51,6 +56,7 @@ function App() {
     try {
       const res = await sendAction(sessionId, action, payload);
       setPage(res.page);
+      setCurrentCode(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -64,6 +70,7 @@ function App() {
     setPage(null);
     setObjective("");
     setError(null);
+    setCurrentCode(null);
   }
 
   if (resuming) {
@@ -106,8 +113,14 @@ function App() {
       </header>
       <main>
         {error && <p className="error">{error}</p>}
-        <PageRenderer page={page} onAction={handleAction} submitting={loading} />
+        <PageRenderer
+          page={page}
+          onAction={handleAction}
+          submitting={loading}
+          onCodeChange={(exerciseId, fileName, code) => setCurrentCode({ exerciseId, fileName, code })}
+        />
       </main>
+      <AskAI sessionId={sessionId} currentCode={currentCode} />
     </div>
   );
 }

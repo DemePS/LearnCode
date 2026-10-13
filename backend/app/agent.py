@@ -24,7 +24,9 @@ You are the engine behind a project-based coding-practice app. There is no hand-
 every screen the learner sees is a JSON "page" that you invent and return, right now, for their
 current learning objective and progress. Nothing you output is shown as chat -- it is rendered by a
 generic UI, so your entire reply must be exactly one JSON object and nothing else: no markdown
-fences, no commentary before or after it.
+fences, no commentary before or after it -- EXCEPT for a side question from the floating help
+widget (the message will say so explicitly): that is not a page navigation, so reply to it in plain
+markdown prose only, no JSON, nothing about page structure. See "Side questions" under Rules below.
 
 Page shape:
 {"title": str, "subtitle": str (optional), "blocks": [Block, ...]}
@@ -96,14 +98,25 @@ Rules:
 - The very first reply (the learner just stated their objective) must be a roadmap page: a short
   markdown intro to the project you propose, then a `roadmap` block with 5-10 items, "available" for
   the first item and "locked" for the rest, plus an `actions` block to open the first exercise.
-- When asked to open an exercise, reply with a page whose main block is `code_editor` for that
-  exercise (plus a short markdown block of context above it if useful).
+- When asked to open an exercise, reply with a page with exactly one `code_editor` block for that
+  exercise (plus a short markdown block of context above it if useful) -- never two `code_editor`
+  blocks on the same page, even if the exercise touches more than one file; if it genuinely needs
+  more than one file, say so in the markdown and pick the single file that is this exercise's real
+  focus, or split it into two roadmap items instead.
 - When given a submission, reply with a `feedback` block first, then an `actions` block: if passed,
   offer to continue to the next exercise or revisit the roadmap; if not, offer to retry (re-show the
   same `code_editor`, generous with hints in `instructions` this time) or ask the agent something.
   Never silently mark something passed that genuinely isn't -- be a fair, specific grader.
 - Keep going until every roadmap item is "done"; the last feedback page should congratulate the
   learner on the finished project and summarize what they built.
+
+Side questions (floating help widget): the learner can ask a question or request a hint at any
+time, from wherever they currently are, without navigating away or losing their in-progress code --
+the message will tell you this is happening and give you their current exercise and code as context
+when there is one. For this one case only, do not return page JSON: answer directly in plain
+markdown prose, a few sentences to a short paragraph, referencing their actual code/situation rather
+than generic advice. Give a hint, a nudge in the right direction, or an explanation of a concept --
+never the full solution code, unless they explicitly ask you to just give them the answer outright.
 """
 
 
@@ -180,3 +193,25 @@ def run_turn(workspace: Path, message: str, resume: bool) -> dict:
         return _extract_json(ui.final_text)
     except json.JSONDecodeError as e:
         return _error_page(f"{e}\n\n{ui.final_text[:2000]}")
+
+
+def ask(workspace: Path, question: str, context: dict) -> str:
+    """The floating help-widget side channel: answered in the same session (so it has the full
+    conversation -- what project, what exercise, what's already been submitted) but, per the "Side
+    questions" rule in PAGE_SYSTEM_PROMPT, as plain prose rather than a page -- so the answer can be
+    shown alongside whatever is currently on screen (an in-progress code_editor, say) without
+    replacing it or losing unsaved edits, unlike run_turn's page swap."""
+    message = (
+        "The learner asked a question via the floating help widget. This is a side question, not a "
+        "page navigation: answer it in plain markdown prose only, per the \"Side questions\" rule -- "
+        "do not return page JSON, and nothing about their current screen should need to change.\n\n"
+        f"Question: {question}\n\n"
+        f"Context (their current exercise/code, if any): {json.dumps(context)}"
+    )
+    ui = CaptureUI()
+    with _LOCK:
+        session.open_project(workspace, ui=ui, tools=[], system_prompt=_ESCAPED_PAGE_SYSTEM_PROMPT, resume=True)
+        ok = session.send(message)
+    if not ok or not ui.final_text.strip():
+        return "Sorry, I couldn't get an answer just now -- try again in a moment."
+    return ui.final_text.strip()

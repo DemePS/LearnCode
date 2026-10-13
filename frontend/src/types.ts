@@ -87,3 +87,7 @@ export interface PageResponse {
   session_id: string;
   page: Page;
 }
+
+export interface AskResponse {
+  answer: string;
+}
