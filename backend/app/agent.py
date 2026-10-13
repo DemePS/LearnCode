@@ -12,6 +12,7 @@ practice app, not for high concurrency (see README "Limitations").
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
 import threading
@@ -180,16 +181,25 @@ def clarify(objective: str, history: list[dict]) -> dict:
             messages=[{"role": "user", "content": "\n\n".join(parts)}],
         )
     except Exception:
+        # Fails open (never blocks a learner from starting just because this one call had a bad
+        # moment) -- but silently, by design, meant something as common as a transient network blip
+        # looked identical to "the model decided it's ready", with nothing in the logs either way.
+        # Logged now specifically because that made a real, persistent failure (bad credentials, a
+        # wrong model name, anything not transient) indistinguishable from normal "no question
+        # needed" behavior -- there was no way to tell, from the outside, that this was ever firing.
+        _log.exception("agent.clarify: the model call failed; failing open to ready=True")
         return {"ready": True}
     text = "".join(block.text for block in response.content if block.type == "text")
     try:
         result = _extract_json(text)
     except json.JSONDecodeError:
+        _log.warning("agent.clarify: could not parse the model's reply as JSON; failing open to ready=True: %r", text[:500])
         return {"ready": True}
     if result.get("ready") is True:
         return {"ready": True}
     question = result.get("question")
     if not isinstance(question, str) or not question.strip():
+        _log.warning("agent.clarify: model said ready=False but gave no usable question; failing open: %r", result)
         return {"ready": True}
     return {"ready": False, "question": question.strip()}
 
@@ -230,6 +240,7 @@ _ESCAPED_PAGE_SYSTEM_PROMPT = PAGE_SYSTEM_PROMPT.replace("{", "{{").replace("}",
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 _LOCK = threading.Lock()
+_log = logging.getLogger(__name__)
 
 # Wording alone ("vary what you build") doesn't reliably stop a model from converging on the same
 # single "obvious" project for a given theme -- a learner reported exactly that (same theme, same
