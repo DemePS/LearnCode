@@ -19,12 +19,10 @@ export interface RoadmapItem {
   id: string;
   title: string;
   summary: string;
+  /** Informational only -- progress and recommended order, never a gate. Every item opens via
+   * open_action regardless of status; the learner can work through the project in any order. */
   status: BlockStatus;
   open_action: string;
-  /** Present on a locked (not yet reachable) item: lets the learner peek at what it's about
-   * without unlocking or starting it. Absent (or present but unused) on an already-open item --
-   * opening it via open_action is itself the full view. */
-  preview_action?: string;
 }
 
 export interface RoadmapBlock {
