@@ -7,7 +7,7 @@ from app import agent
 
 
 class FakeSession:
-    def open_project(self, workspace, ui, tools, system_prompt, resume):
+    def open_project(self, workspace, ui, tools=None, system_prompt=None, resume=False):
         self.ui = ui
 
     def send(self, message):

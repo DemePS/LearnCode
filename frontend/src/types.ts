@@ -99,3 +99,19 @@ export interface ClarifyResponse {
   ready: boolean;
   question: string | null;
 }
+
+/** One line of the live activity feed shown while a turn runs (backend/app/progress.py). `detail`
+ * names the thing being worked on, and `ok === false` marks a step the agent had to work around. */
+export interface ProgressStep {
+  text: string;
+  kind: string;
+  detail?: string;
+  ok?: boolean | null;
+  done?: boolean;
+  error?: string;
+}
+
+export interface ProgressResponse {
+  steps: ProgressStep[];
+  done: boolean;
+}

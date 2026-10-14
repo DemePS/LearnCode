@@ -1,4 +1,4 @@
-import type { AskResponse, ClarifyResponse, ClarifyTurn, PageResponse } from "./types";
+import type { AskResponse, ClarifyResponse, ClarifyTurn, PageResponse, ProgressResponse } from "./types";
 
 async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -18,11 +18,15 @@ export function clarify(objective: string, history: ClarifyTurn[]): Promise<Clar
   }).then(asJson<ClarifyResponse>);
 }
 
-export function startSession(objective: string, history: ClarifyTurn[] = []): Promise<PageResponse> {
+export function startSession(
+  objective: string,
+  history: ClarifyTurn[] = [],
+  turnId = "",
+): Promise<PageResponse> {
   return fetch("/api/learn/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ objective, history }),
+    body: JSON.stringify({ objective, history, turn_id: turnId }),
   }).then(asPageResponse);
 }
 
@@ -30,12 +34,19 @@ export function sendAction(
   sessionId: string,
   action: string,
   payload: Record<string, unknown> = {},
+  turnId = "",
 ): Promise<PageResponse> {
   return fetch(`/api/learn/${sessionId}/action`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, payload }),
+    body: JSON.stringify({ action, payload, turn_id: turnId }),
   }).then(asPageResponse);
+}
+
+/** The live feed for a turn that is still running. Never throws on an unknown turn id -- the backend
+ * answers those with an empty, finished feed, since a poll can arrive just after a turn ended. */
+export function getProgress(turnId: string): Promise<ProgressResponse> {
+  return fetch(`/api/learn/progress/${encodeURIComponent(turnId)}`).then(asJson<ProgressResponse>);
 }
 
 export function getSession(sessionId: string): Promise<PageResponse> {

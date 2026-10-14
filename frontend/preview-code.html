@@ -1,0 +1,61 @@
+<!doctype html>
+<!-- Static preview of fenced-code syntax colours in agent markdown (Md.tsx + styles.css).
+     The markup below is exactly what rehype-highlight emits for these fences -- highlight.js wraps
+     each token in `<span class="hljs-keyword">` and friends -- so the colours are the real ones.
+     Open it directly in a browser. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LearnCode — code fence colours preview</title>
+    <link rel="stylesheet" href="src/styles.css" />
+  </head>
+  <body>
+    <main>
+      <div class="block block-markdown">
+        <h2>Before: what the editor does with this</h2>
+        <p>A Python fence, as the agent writes them when it explains what you are about to build:</p>
+        <pre><code class="hljs language-python"><span class="hljs-keyword">import</span> subprocess
+<span class="hljs-keyword">from</span> pathlib <span class="hljs-keyword">import</span> Path
+
+<span class="hljs-comment"># --no-pager matters: a user with core.pager set would otherwise get nothing on stdout.</span>
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">run_git</span>(<span class="hljs-params">args: <span class="hljs-built_in">list</span>[<span class="hljs-built_in">str</span>], cwd: Path</span>) -&gt; <span class="hljs-built_in">str</span>:
+    proc = subprocess.<span class="hljs-title function_">run</span>(
+        [<span class="hljs-string">"git"</span>, <span class="hljs-string">"--no-pager"</span>, <span class="hljs-operator">*</span>args],
+        cwd<span class="hljs-operator">=</span>cwd, capture_output<span class="hljs-operator">=</span><span class="hljs-literal">True</span>, text<span class="hljs-operator">=</span><span class="hljs-literal">True</span>,
+    )
+    <span class="hljs-keyword">if</span> proc.returncode <span class="hljs-operator">!=</span> <span class="hljs-number">0</span>:
+        <span class="hljs-keyword">raise</span> <span class="hljs-title class_">GitError</span>(proc.stderr.<span class="hljs-title function_">strip</span>())
+    <span class="hljs-keyword">return</span> proc.stdout
+</code></pre>
+
+        <h2>A shell fence, and a diff</h2>
+        <pre><code class="hljs language-bash"><span class="hljs-comment"># Run the tests for the module you just wrote</span>
+uv run pytest tests/test_git_runner.py -v
+</code></pre>
+
+        <pre><code class="hljs language-diff"><span class="hljs-comment">@@ -12,7 +12,7 @@ def run_git(args, cwd):</span>
+     proc = subprocess.run(
+<span class="hljs-deletion">-        ["git", *args],</span>
+<span class="hljs-addition">+        ["git", "--no-pager", *args],</span>
+         cwd=cwd, capture_output=True, text=True,
+     )
+</code></pre>
+
+        <h2>A JSON fence</h2>
+        <pre><code class="hljs language-json">{
+  <span class="hljs-attr">"name"</span>: <span class="hljs-string">"changelogd"</span>,
+  <span class="hljs-attr">"version"</span>: <span class="hljs-number">0.1.0</span>,
+  <span class="hljs-attr">"dependencies"</span>: { <span class="hljs-attr">"click"</span>: <span class="hljs-string">"^8.1"</span> }
+}
+</code></pre>
+
+        <h2>An inline span, for contrast</h2>
+        <p>
+          The inline pill still works: <code>uv run pytest -q</code> sits inline, while a fence gets the
+          panel above.
+        </p>
+      </div>
+    </main>
+  </body>
+</html>

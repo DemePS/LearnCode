@@ -56,7 +56,12 @@ main {
   padding: 32px 24px 80px;
 }
 
-.objective-form {
+/* The two screens a learner sees before a session exists -- the objective form and the clarifying
+   question it is swapped for -- share one panel rule, so the hand-off between them doesn't move
+   anything on screen. QuestionPrompt needs its own selector rather than an ancestor match because it
+   is a sibling of the form in App.tsx, not a child. */
+.objective-form,
+.question-prompt {
   max-width: 560px;
   width: 100%;
   background: var(--panel);
@@ -65,9 +70,11 @@ main {
   padding: 32px;
 }
 
-.objective-form h1 {
+.objective-form h1,
+.question-prompt-label {
   margin-top: 0;
   font-size: 1.4rem;
+  font-weight: 700;
 }
 
 .objective-hint {
@@ -75,7 +82,17 @@ main {
   font-size: 0.9rem;
 }
 
-.objective-form textarea {
+/* The question carries the screen, so unlike a hint it is set at reading size in the normal text
+   colour -- then the card, label and answer box around it all match the objective form exactly. */
+.question-prompt-text {
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1.5;
+  margin: 12px 0 0;
+}
+
+.objective-form textarea,
+.question-prompt textarea {
   width: 100%;
   background: var(--bg);
   color: var(--text);
@@ -84,6 +101,28 @@ main {
   padding: 12px;
   font-size: 1rem;
   resize: vertical;
+  /* Only the question's answer box follows text directly, so only it needs the gap; the objective
+     form's textarea follows a hint paragraph whose own margin already spaces it. */
+  margin-top: 0;
+}
+
+.question-prompt textarea {
+  margin-top: 12px;
+}
+
+/* The pages the agent generates (roadmap, exercise, feedback) had no h1 rule of their own -- only
+   .objective-form h1 and .feedback-details h1 existed -- so the roadmap title rendered at the
+   browser default while the objective form's rendered at 1.4rem. Same size now, so entering a
+   session doesn't jump the heading. */
+.page h1 {
+  margin-top: 0;
+  font-size: 1.4rem;
+}
+
+.page-subtitle {
+  color: var(--muted);
+  font-size: 0.95rem;
+  margin-top: -8px;
 }
 
 .btn {
@@ -104,7 +143,6 @@ main {
   background: var(--accent);
   color: white;
 }
-
 .btn-secondary {
   background: var(--panel);
   color: var(--text);
@@ -289,6 +327,306 @@ main {
   font-size: 0.9em;
 }
 
+/* Agent-written prose. The markdown containers above only styled tables and inline code, so headings,
+   lists, quotes and code fences fell back to unstyled browser defaults -- and because the page is on
+   a dark background with its own colour scheme, the default black-on-dark made them near-invisible.
+   One rule set for all three containers: they render the same markdown through the same component
+   (Md), so any difference between them would be an accident. */
+.block-markdown,
+.code-editor-instructions,
+.feedback-details {
+  line-height: 1.65;
+}
+
+.block-markdown > :first-child,
+.code-editor-instructions > :first-child,
+.feedback-details > :first-child {
+  margin-top: 0;
+}
+
+.block-markdown > :last-child,
+.code-editor-instructions > :last-child,
+.feedback-details > :last-child {
+  margin-bottom: 0;
+}
+
+.block-markdown h1,
+.block-markdown h2,
+.block-markdown h3,
+.block-markdown h4,
+.code-editor-instructions h1,
+.code-editor-instructions h2,
+.code-editor-instructions h3,
+.code-editor-instructions h4,
+.feedback-details h1,
+.feedback-details h2,
+.feedback-details h3,
+.feedback-details h4 {
+  margin: 26px 0 10px;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+/* h1 is the page's own title block, so an h1 inside prose is deliberately smaller than one would be
+   on its own -- the agent uses headings as section markers within a page, not as page titles. */
+.block-markdown h1,
+.code-editor-instructions h1,
+.feedback-details h1 {
+  font-size: 1.3rem;
+}
+
+.block-markdown h2,
+.code-editor-instructions h2,
+.feedback-details h2 {
+  font-size: 1.14rem;
+}
+
+.block-markdown h3,
+.code-editor-instructions h3,
+.feedback-details h3 {
+  font-size: 1rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.block-markdown h4,
+.code-editor-instructions h4,
+.feedback-details h4 {
+  font-size: 0.95rem;
+}
+
+.block-markdown p,
+.code-editor-instructions p,
+.feedback-details p {
+  margin: 12px 0;
+}
+
+.block-markdown a,
+.code-editor-instructions a,
+.feedback-details a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.block-markdown a:hover,
+.code-editor-instructions a:hover,
+.feedback-details a:hover {
+  border-bottom-color: var(--accent);
+}
+
+.block-markdown strong,
+.code-editor-instructions strong,
+.feedback-details strong {
+  color: #fff;
+  font-weight: 650;
+}
+
+.block-markdown ul,
+.block-markdown ol,
+.code-editor-instructions ul,
+.code-editor-instructions ol,
+.feedback-details ul,
+.feedback-details ol {
+  margin: 12px 0;
+  padding-left: 22px;
+}
+
+.block-markdown li,
+.code-editor-instructions li,
+.feedback-details li {
+  margin: 5px 0;
+}
+
+/* GFM task lists (remark-gfm renders these): the checkbox is a real input, so it needs to sit on the
+   same line as its label rather than above it. */
+.block-markdown li input[type="checkbox"],
+.code-editor-instructions li input[type="checkbox"],
+.feedback-details li input[type="checkbox"] {
+  margin-right: 7px;
+  vertical-align: 1px;
+  accent-color: var(--accent);
+}
+
+.block-markdown li:has(> input[type="checkbox"]),
+.code-editor-instructions li:has(> input[type="checkbox"]),
+.feedback-details li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -22px;
+}
+
+.block-markdown blockquote,
+.code-editor-instructions blockquote,
+.feedback-details blockquote {
+  margin: 14px 0;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.block-markdown hr,
+.code-editor-instructions hr,
+.feedback-details hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 22px 0;
+}
+
+/* A fenced block. The prose styles above give `code` an inline pill background, which looks wrong
+   filling a whole block, so the pre and the code inside it are reset here. */
+.block-markdown pre,
+.code-editor-instructions pre,
+.feedback-details pre {
+  background: #0b0d12;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 14px 0;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+
+.block-markdown pre code,
+.code-editor-instructions pre code,
+.feedback-details pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 0.86rem;
+  color: var(--text);
+}
+
+/* Fenced-code syntax colours, applied by rehype-highlight (see Md.tsx). It emits highlight.js class
+   names (hljs-keyword, hljs-string, ...), so these are the theme -- there is no imported stylesheet,
+   because a stock highlight.js theme carries its own background, padding and font, which would fight
+   the `pre` styling above. The palette is the app's own: it reuses the accent blue for keywords and
+   defines the few hues the palette does not have (strings, numbers, comments) to sit alongside it. */
+.block-markdown .hljs-comment,
+.block-markdown .hljs-quote,
+.code-editor-instructions .hljs-comment,
+.code-editor-instructions .hljs-quote,
+.feedback-details .hljs-comment,
+.feedback-details .hljs-quote {
+  color: #6b7280;
+  font-style: italic;
+}
+
+.block-markdown .hljs-keyword,
+.block-markdown .hljs-selector-tag,
+.block-markdown .hljs-literal,
+.block-markdown .hljs-section,
+.block-markdown .hljs-doctag,
+.block-markdown .hljs-name,
+.code-editor-instructions .hljs-keyword,
+.code-editor-instructions .hljs-selector-tag,
+.code-editor-instructions .hljs-literal,
+.code-editor-instructions .hljs-section,
+.code-editor-instructions .hljs-doctag,
+.code-editor-instructions .hljs-name,
+.feedback-details .hljs-keyword,
+.feedback-details .hljs-selector-tag,
+.feedback-details .hljs-literal,
+.feedback-details .hljs-section,
+.feedback-details .hljs-doctag,
+.feedback-details .hljs-name {
+  color: #c792ea;
+}
+
+.block-markdown .hljs-string,
+.block-markdown .hljs-regexp,
+.block-markdown .hljs-addition,
+.block-markdown .hljs-attribute,
+.block-markdown .hljs-meta .hljs-string,
+.code-editor-instructions .hljs-string,
+.code-editor-instructions .hljs-regexp,
+.code-editor-instructions .hljs-addition,
+.code-editor-instructions .hljs-attribute,
+.code-editor-instructions .hljs-meta .hljs-string,
+.feedback-details .hljs-string,
+.feedback-details .hljs-regexp,
+.feedback-details .hljs-addition,
+.feedback-details .hljs-attribute,
+.feedback-details .hljs-meta .hljs-string {
+  color: #a5d6a7;
+}
+
+.block-markdown .hljs-number,
+.block-markdown .hljs-symbol,
+.block-markdown .hljs-bullet,
+.block-markdown .hljs-variable,
+.block-markdown .hljs-template-variable,
+.block-markdown .hljs-link,
+.code-editor-instructions .hljs-number,
+.code-editor-instructions .hljs-symbol,
+.code-editor-instructions .hljs-bullet,
+.code-editor-instructions .hljs-variable,
+.code-editor-instructions .hljs-template-variable,
+.code-editor-instructions .hljs-link,
+.feedback-details .hljs-number,
+.feedback-details .hljs-symbol,
+.feedback-details .hljs-bullet,
+.feedback-details .hljs-variable,
+.feedback-details .hljs-template-variable,
+.feedback-details .hljs-link {
+  color: #f78c6c;
+}
+
+/* Function and class names. These are what make a snippet scannable, so they get the accent, and
+   definitions are emphasised over call sites. */
+.block-markdown .hljs-title,
+.block-markdown .hljs-title.function_,
+.block-markdown .hljs-title.class_,
+.block-markdown .hljs-built_in,
+.block-markdown .hljs-type,
+.code-editor-instructions .hljs-title,
+.code-editor-instructions .hljs-title.function_,
+.code-editor-instructions .hljs-title.class_,
+.code-editor-instructions .hljs-built_in,
+.code-editor-instructions .hljs-type,
+.feedback-details .hljs-title,
+.feedback-details .hljs-title.function_,
+.feedback-details .hljs-title.class_,
+.feedback-details .hljs-built_in,
+.feedback-details .hljs-type {
+  color: var(--accent);
+}
+
+.block-markdown .hljs-attr,
+.block-markdown .hljs-property,
+.block-markdown .hljs-params,
+.block-markdown .hljs-meta,
+.code-editor-instructions .hljs-attr,
+.code-editor-instructions .hljs-property,
+.code-editor-instructions .hljs-params,
+.code-editor-instructions .hljs-meta,
+.feedback-details .hljs-attr,
+.feedback-details .hljs-property,
+.feedback-details .hljs-params,
+.feedback-details .hljs-meta {
+  color: #89ddff;
+}
+
+/* A deleted line in a diff, which the agent uses when it shows what to change. */
+.block-markdown .hljs-deletion,
+.code-editor-instructions .hljs-deletion,
+.feedback-details .hljs-deletion {
+  color: var(--bad);
+}
+
+.block-markdown .hljs-emphasis,
+.code-editor-instructions .hljs-emphasis,
+.feedback-details .hljs-emphasis {
+  font-style: italic;
+}
+
+.block-markdown .hljs-strong,
+.code-editor-instructions .hljs-strong,
+.feedback-details .hljs-strong {
+  font-weight: 600;
+}
+
 .ask-ai {
   position: fixed;
   right: 24px;
@@ -420,4 +758,68 @@ main {
 
 .ask-ai-hint {
   width: 100%;
+}
+
+/* The full-screen "a turn is running" view (components/ActivityFeed.tsx). It takes over the page for
+   20-60s while the agent searches GitHub and reads a real repository, so it is centred, quiet, and
+   shows exactly one line at a time -- the point is to make the wait legible, not to entertain. */
+.working {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: 100%;
+  gap: 0;
+  padding: 32px 24px;
+}
+
+/* Big and deliberately slow: a fast spinner reads as a stalled animation and makes a 40-second wait
+   feel broken, while a slow one reads as "still going". Sized in rem so it scales with the page. */
+.working-spinner {
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  border: 5px solid var(--border);
+  border-top-color: var(--accent);
+  animation: working-spin 2.4s linear infinite;
+  /* the visual anchor of the screen, so the title below reads as its caption */
+  margin-bottom: 36px;
+}
+
+@keyframes working-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* A reader who asked for less motion still gets the changing line below, so nothing about "is it
+   working?" depends on the animation. */
+@media (prefers-reduced-motion: reduce) {
+  .working-spinner {
+    animation: none;
+    border-top-color: var(--accent);
+  }
+}
+
+.working-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+
+/* The current step, and the only line on screen. A fixed min-height reserves its space whether or
+   not text is in it, so a long path wrapping to two lines doesn't shove the layout -- the text
+   changing is the only thing that should move. */
+.working-step {
+  margin: 12px 0 0;
+  min-height: 1.6em;
+  max-width: 540px;
+  font-size: 0.95rem;
+  color: var(--muted);
+  /* Long paths (packages/api/src/yubal_api/services/subscription_service.py) must break rather than
+     widen the line past its max-width. */
+  overflow-wrap: anywhere;
 }

@@ -1,0 +1,90 @@
+<!doctype html>
+<!-- Static preview of how agent-written markdown renders (components/Md.tsx + styles.css).
+     Loads the real stylesheet and uses real markdown an earlier turn produced, so what you see is
+     what the app shows. The `marked`-style HTML below is what react-markdown emits for this input.
+     Open it directly in a browser. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LearnCode — markdown preview</title>
+    <link rel="stylesheet" href="src/styles.css" />
+  </head>
+  <body>
+    <main>
+      <div class="block block-markdown">
+        <h2>Why this component comes first</h2>
+        <p>
+          Every other part of <code>changelogd</code> is built on one question:
+          <em>"what did git say?"</em> If that one call is sloppy, the bugs show up later as
+          mysterious empty results or mojibake in the middle of your release notes, and you'll waste
+          an hour debugging the wrong layer.
+        </p>
+        <p>
+          So before we do anything interesting, we make a <strong>boring, trustworthy function</strong>
+          that runs git and hands back its output.
+        </p>
+
+        <h3>The four traps in <code>subprocess.run(["git", ...])</code></h3>
+        <p>Each of these is a real bug people ship:</p>
+        <ol>
+          <li>
+            <strong>The pager.</strong> If <code>core.pager</code> is set (many people run
+            <code>delta</code> or <code>less</code>), git may write to a pager instead of stdout.
+            <code>--no-pager</code> at the front of the argv kills that.
+          </li>
+          <li>
+            <strong>User config.</strong> A developer with <code>alias.lg</code> in their
+            <code>~/.gitconfig</code> changes your output. <code>-c</code> flags passed
+            <em>before</em> the subcommand force the settings you depend on.
+          </li>
+          <li>
+            <strong>The working directory.</strong> Never rely on the process's cwd. Pass
+            <code>cwd=</code> explicitly so the runner works on any repo path.
+          </li>
+          <li>
+            <strong>Failures that look like success.</strong> <code>subprocess.run</code> does
+            <em>not</em> raise on a non-zero exit code.
+          </li>
+        </ol>
+
+        <h3>Acceptance criteria</h3>
+        <ul>
+          <li><input type="checkbox" checked disabled /> Runs a git command and returns <code>str</code></li>
+          <li><input type="checkbox" disabled /> Raises a dedicated exception on failure</li>
+          <li><input type="checkbox" disabled /> Never invokes a pager</li>
+        </ul>
+
+        <blockquote>
+          <p>Pass <code>cwd=</code> rather than calling <code>os.chdir()</code> — that is global mutable state.</p>
+        </blockquote>
+
+        <p>A fenced block, which the agent uses for the code it wants you to read:</p>
+        <pre><code>def run_git(args: list[str], cwd: Path) -&gt; str:
+    proc = subprocess.run(
+        ["git", "--no-pager", *args],
+        cwd=cwd, capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        raise GitError(proc.stderr.strip())
+    return proc.stdout</code></pre>
+
+        <hr />
+        <p>
+          See the <a href="#">git documentation</a> for the full list of environment variables.
+        </p>
+
+        <h3>How we scale it down</h3>
+        <table>
+          <thead>
+            <tr><th>Real project</th><th>Your version</th><th>Why</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Plugin system</td><td>Not included</td><td>Needs packaging knowledge</td></tr>
+            <tr><td>Git log parsing</td><td>Kept</td><td>The core skill</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </body>
+</html>

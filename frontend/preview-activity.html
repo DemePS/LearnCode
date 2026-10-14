@@ -1,0 +1,49 @@
+<!doctype html>
+<!-- Static preview of the full-screen "a turn is running" view (components/ActivityFeed.tsx).
+     Loads the real styles.css, so the colours, spacing and type are the app's own, and reproduces
+     the markup the component emits: one .working container, and one .working-step line whose text is
+     replaced as the agent moves on. Open it directly in a browser. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LearnCode — working screen preview</title>
+    <link rel="stylesheet" href="src/styles.css" />
+  </head>
+  <body>
+    <p style="color: var(--muted); margin: 16px 24px 0; font-size: 0.8rem">
+      Preview only — the same view at four moments of one turn, one after another. Not wired to the
+      app. The text of the single line is the only thing that changes.
+    </p>
+
+    <!-- 1. before anything is reported -->
+    <div class="working">
+      <div class="working-spinner"></div>
+      <h2 class="working-title">Building your tailored project</h2>
+      <p class="working-step">Getting started…</p>
+    </div>
+
+    <!-- 2. the search -->
+    <div class="working">
+      <div class="working-spinner"></div>
+      <h2 class="working-title">Building your tailored project</h2>
+      <p class="working-step">Searching GitHub for a project matching fastapi</p>
+    </div>
+
+    <!-- 3. the clone -->
+    <div class="working">
+      <div class="working-spinner"></div>
+      <h2 class="working-title">Building your tailored project</h2>
+      <p class="working-step">Cloning guillevc/yubal</p>
+    </div>
+
+    <!-- 4. a long path, wrapping inside the fixed-width line rather than widening it -->
+    <div class="working">
+      <div class="working-spinner"></div>
+      <h2 class="working-title">Building your tailored project</h2>
+      <p class="working-step">
+        Reading packages/api/src/yubal_api/services/subscription_service.py
+      </p>
+    </div>
+  </body>
+</html>

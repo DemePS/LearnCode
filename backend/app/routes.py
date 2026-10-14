@@ -10,7 +10,7 @@ import json
 from fastapi import APIRouter, HTTPException
 from starlette.concurrency import run_in_threadpool
 
-from . import agent, store
+from . import agent, progress, store
 from .schemas import (
     ActionRequest,
     AskRequest,
@@ -18,10 +18,25 @@ from .schemas import (
     ClarifyRequest,
     ClarifyResponse,
     PageResponse,
+    ProgressResponse,
     StartRequest,
 )
 
 router = APIRouter(prefix="/api/learn")
+
+
+@router.get("/progress/{turn_id}", response_model=ProgressResponse)
+async def turn_progress(turn_id: str) -> ProgressResponse:
+    """What the browser polls while /start or /action is still in flight, so the learner sees the
+    agent searching, cloning and reading instead of a frozen button (see app/progress.py).
+
+    Returns an empty, finished feed rather than a 404 for an unknown turn: a poll can legitimately
+    arrive just after the turn's entry was pruned (or after a server restart), and that is not an
+    error the frontend should have to handle -- it only ever means "nothing left to show"."""
+    snap = progress.snapshot(turn_id)
+    if snap is None:
+        return ProgressResponse(steps=[], done=True)
+    return ProgressResponse(steps=snap["steps"], done=snap["done"])
 
 
 @router.post("/clarify", response_model=ClarifyResponse)
@@ -52,7 +67,11 @@ async def start(body: StartRequest) -> PageResponse:
         parts.append(f"Clarifying Q: {turn.question}\nLearner's answer: {turn.answer}")
     parts.append(f"Propose the project roadmap page. {agent.variety_hint()}")
     message = "\n\n".join(parts)
-    page = await run_in_threadpool(agent.run_turn, workspace, message, False)
+    if body.turn_id:
+        # Registered before the worker starts, so a poll arriving immediately finds the feed rather
+        # than an unknown turn id.
+        progress.start(body.turn_id)
+    page = await run_in_threadpool(agent.run_turn, workspace, message, False, body.turn_id)
     store.save_last_page(session_id, page)
     return PageResponse(session_id=session_id, page=page)
 
@@ -80,7 +99,9 @@ async def act(session_id: str, body: ActionRequest) -> PageResponse:
         "Continue the experience and return the next page JSON."
     )
     workspace = store.workspace_for(session_id)
-    page = await run_in_threadpool(agent.run_turn, workspace, message, True)
+    if body.turn_id:
+        progress.start(body.turn_id)
+    page = await run_in_threadpool(agent.run_turn, workspace, message, True, body.turn_id)
     store.save_last_page(session_id, page)
     return PageResponse(session_id=session_id, page=page)
 
