@@ -104,24 +104,25 @@ markdown prose only, no JSON, nothing about page structure. See "Side questions"
 Page shape:
 {"title": str, "subtitle": str (optional), "blocks": [Block, ...]}
 
-When you are asked to propose the roadmap (the first page of a project), reply instead with the
-roadmap page AND the full detail of every exercise on it, as one object:
-{"roadmap": {page}, "exercises": [{page with an "open_action"}, ...]}
-You do this because the project's code is in your context just once, right then, after the clone; so
-the exercises are written while you can still see it, and each one is stored ready to be opened
-later without a fresh call. Every roadmap item must have exactly one exercise in `exercises` whose
-"open_action" is identical to that item's "open_action" -- that id is the only link between them, and
-an exercise whose open_action does not match any roadmap item can never be opened. Write each
-exercise as a complete page (title, markdown explaining the task, a code_editor block with the real
-starter_code and instructions, and a submit_action). On every other page -- an action being answered,
-a submission being reviewed -- reply with exactly one page object as usual.
+When you are asked to propose the roadmap (the first page of a project), reply with exactly one page
+object as usual: a short markdown intro plus a `roadmap` block. Call validate_json_roadmap on it and
+fix whatever it reports before you finish.
 
-Before you finish a turn in which you wrote a roadmap, call validate_json_roadmap on the roadmap page
-and validate_json_exercises on the exercises, and fix whatever they report until both say the JSON is
-valid. They check the shapes below and the roadmap-to-exercise links: an exercise whose open_action
-matches no roadmap item can never be opened, and a roadmap item with no exercise becomes a button that
-runs a whole needless turn. Catching that yourself is the difference between a working project and one
-the learner cannot start.
+Right after that, expect one follow-up message per roadmap item, in order, each asking you to write
+that one item's exercise ("Now write the full exercise page for roadmap item '<id>'
+(open_action=...)"). Reply to each with exactly one page object: that exercise alone -- a markdown
+block of task context, a code_editor block with real starter_code and instructions, and a
+submit_action -- nothing about the roadmap or any other exercise. You do not need to repeat the
+open_action yourself; the backend already knows which item it belongs to from the message that asked
+for it. Call validate_json_exercises on each one and fix whatever it reports before you finish that
+reply. Writing one exercise per reply, instead of the whole set in one giant object, keeps each reply
+short enough that it cannot be cut off mid-stream (a real risk once a dozen multi-line starter_code
+strings are crammed into a single JSON value) -- and if one does get cut off, only that exercise is
+lost, not the rest. The project's code is still in your context throughout this exchange, so every
+exercise is still written while you can see it; they are simply written and stored one at a time.
+
+On every other page -- an action being answered, a submission being reviewed -- reply with exactly
+one page object as usual.
 
 Each Block is one of (the "type" field selects which):
 
@@ -725,6 +726,66 @@ def _grounding_note(ui: CaptureUI) -> str | None:
             f"Try the step again.")
 
 
+def _roadmap_items(page: dict) -> list[dict]:
+    """The roadmap block's items, or an empty list if this page carries none."""
+    blocks = page.get("blocks") if isinstance(page, dict) else None
+    if not isinstance(blocks, list):
+        return []
+    for block in blocks:
+        if isinstance(block, dict) and block.get("type") == "roadmap":
+            items = block.get("items")
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+    return []
+
+
+def _write_exercises(ui: CaptureUI, page: dict, turn_id: str) -> dict[str, dict]:
+    """Ask for each roadmap item's exercise in its own follow-up message, one at a time, in the same
+    (still open) session -- see the "Right after that" paragraph of PAGE_SYSTEM_PROMPT.
+
+    A smaller reply is far less likely to be cut off mid-stream than one giant object carrying every
+    exercise at once (see _streamed_send's docstring), and a cut-off here costs only this one
+    exercise -- retried on its own -- rather than the whole roadmap. An item left out of the result
+    just means store.py has no exercise for its open_action, which is already handled: the learner's
+    click falls back to a live turn instead of a free database read. A hiccup on one exercise must
+    never fail the roadmap itself, so every failure here is logged and skipped, not raised."""
+    items = _roadmap_items(page)
+    exercises: dict[str, dict] = {}
+    for idx, item in enumerate(items, 1):
+        open_action = item.get("open_action")
+        if not isinstance(open_action, str) or not open_action.strip():
+            continue
+        open_action = open_action.strip()
+        title = item.get("title") or open_action
+        if turn_id:
+            progress.step(turn_id, f"Writing exercise {idx}/{len(items)}: {title}", kind="work")
+        message = (
+            f"Now write the full exercise page for roadmap item {item.get('id')!r} "
+            f"(open_action={open_action!r}, title: {title!r}). Reply with exactly one page object: "
+            "that exercise alone."
+        )
+        try:
+            ok = _streamed_send(ui, message)
+        except ValueError as e:
+            _log.warning("%scould not write exercise %r: %s", ui._prefix, open_action, str(e).splitlines()[0])
+            continue
+        if not ok or not ui.final_text.strip():
+            _log.warning("%scould not write exercise %r: %s", ui._prefix, open_action,
+                         ui.error_text or "empty reply")
+            continue
+        try:
+            exercise = _extract_json(ui.final_text)
+        except json.JSONDecodeError as e:
+            _log.warning("%sexercise %r reply was not valid JSON: %s", ui._prefix, open_action, e)
+            continue
+        if not isinstance(exercise.get("blocks"), list):
+            _log.warning("%sexercise %r reply had no usable blocks", ui._prefix, open_action)
+            continue
+        exercise["open_action"] = open_action  # ours to assign -- the model does not need to echo it
+        exercises[open_action] = exercise
+    return exercises
+
+
 def run_turn(workspace: Path, message: str, resume: bool, turn_id: str = "",
              github_token: str | None = None, require_grounding: bool = False,
              opening: str = "Building your project") -> TurnResult:
@@ -759,6 +820,7 @@ def run_turn(workspace: Path, message: str, resume: bool, turn_id: str = "",
         # A turn opens with a model call that can take several seconds before any tool runs, so the
         # feed needs a first line immediately or the panel sits empty and looks broken.
         progress.step(turn_id, opening, kind="think")
+    result: TurnResult | None = None
     with github_lookup.use_token(github_token), _turn_slot(turn_id):
         reset_turn_budget()  # the per-turn GitHub lookup cap starts fresh for every instruction
         reset_readme_budget()
@@ -771,36 +833,54 @@ def run_turn(workspace: Path, message: str, resume: bool, turn_id: str = "",
                 # screen.
                 ok = False
                 ui.error_text = str(e)
+            if not ok:
+                if ui.error_text and "parse tool parameter JSON" in ui.error_text:
+                    result = TurnResult(_malformed_reply_page())
+                else:
+                    result = TurnResult(_error_page(
+                        ui.error_text or "The agent did not answer (no further detail was reported)."))
+            elif not ui.final_text.strip():
+                result = TurnResult(_error_page(
+                    "The agent's reply was empty." + (f"\n\n{ui.error_text}" if ui.error_text else "")))
+            else:
+                try:
+                    page = _extract_json(ui.final_text)
+                except json.JSONDecodeError as e:
+                    result = TurnResult(_error_page(f"{e}\n\n{ui.final_text[:2000]}"))
+                else:
+                    # A plain page unwraps unchanged; the old {"roadmap": ..., "exercises": [...]} shape
+                    # (a resumed conversation that predates this, or a model that ignored the new
+                    # protocol) still unwraps too, so this stays a safe no-op either way.
+                    result = _split_exercises(page)
+                    if require_grounding and not result.exercises:
+                        # The roadmap turn designs the project; its exercises are written one at a time
+                        # right after, in this same still-open session, while the clone is still in
+                        # context -- see _write_exercises. Skipped when exercises already arrived with
+                        # the roadmap (the legacy shape above), so a resumed old conversation is not
+                        # asked to write every exercise twice.
+                        result.exercises = _write_exercises(ui, result.page, turn_id)
+                    # The turn produced valid page JSON -- but did it actually open a repository? A page
+                    # that skipped the clone is still well-formed, so without this the learner gets a
+                    # confident project naming a repository nobody read. The note goes on the page (not
+                    # an error page) because the rest of it is usually still useful, and this is a
+                    # visible caveat rather than a failed turn.
+                    note = _grounding_note(ui) if require_grounding else None
+                    if note:
+                        _log.warning("%s%s", ui._prefix, note)
+                        banner = {"type": "markdown", "content": f"> **Not verified.** {note}"}
+                        blocks = result.page.get("blocks")
+                        if isinstance(blocks, list):
+                            blocks.insert(0, banner)
+                        else:
+                            # A page without a usable blocks list would render nothing -- and the caveat
+                            # is the one thing that must not be lost, so it becomes the page rather than
+                            # a log line nobody reads.
+                            result.page = {"title": result.page.get("title") or "Not verified",
+                                           "blocks": [banner]}
     if turn_id:
         progress.finish(turn_id)
-    if not ok:
-        if ui.error_text and "parse tool parameter JSON" in ui.error_text:
-            return TurnResult(_malformed_reply_page())
-        return TurnResult(_error_page(
-            ui.error_text or "The agent did not answer (no further detail was reported)."))
-    if not ui.final_text.strip():
-        return TurnResult(_error_page(
-            "The agent's reply was empty." + (f"\n\n{ui.error_text}" if ui.error_text else "")))
-    try:
-        page = _extract_json(ui.final_text)
-    except json.JSONDecodeError as e:
-        return TurnResult(_error_page(f"{e}\n\n{ui.final_text[:2000]}"))
-    # The turn produced valid page JSON -- but did it actually open a repository? A page that skipped
-    # the clone is still well-formed, so without this the learner gets a confident project naming a
-    # repository nobody read. The note goes on the page (not an error page) because the rest of it is
-    # usually still useful, and this is a visible caveat rather than a failed turn.
-    note = _grounding_note(ui) if require_grounding else None
-    if note:
-        _log.warning("%s%s", ui._prefix, note)
-        banner = {"type": "markdown", "content": f"> **Not verified.** {note}"}
-        blocks = page.get("blocks")
-        if isinstance(blocks, list):
-            blocks.insert(0, banner)
-        else:
-            # A page without a usable blocks list would render nothing -- and the caveat is the one thing
-            # that must not be lost, so it becomes the page rather than a log line nobody reads.
-            page = {"title": page.get("title") or "Not verified", "blocks": [banner]}
-    return _split_exercises(page)
+    assert result is not None
+    return result
 
 
 class TurnResult:

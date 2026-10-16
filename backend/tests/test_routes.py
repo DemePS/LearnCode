@@ -375,9 +375,9 @@ def test_an_unknown_action_still_runs_a_turn(client, as_user, monkeypatch):
     monkeypatch.setattr(agent, "_grounding_note", lambda ui: None)
     sid = client.post("/api/learn/start",
                       json={"objective": "learn FastAPI", "history": []}).json()["session_id"]
-    # open_ex2 was never generated (the fake only returns one exercise), so this must not be answered from
-    # storage -- it has to reach the fake session and come back with whatever it produces.
-    acted = client.post(f"/api/learn/{sid}/action", json={"action": "open_ex2", "payload": {}})
+    # open_ex9 was never generated (not one of the roadmap's two items), so this must not be answered
+    # from storage -- it has to reach the fake session and come back with whatever it produces.
+    acted = client.post(f"/api/learn/{sid}/action", json={"action": "open_ex9", "payload": {}})
     assert acted.status_code == 200
     assert "Feedback on exercise 1" in acted.json()["page"]["title"]
 
@@ -416,7 +416,11 @@ def test_session_list_is_newest_first(client, as_user):
     as_user()
     first = client.post("/api/learn/start", json={"objective": "older", "history": []}).json()["session_id"]
     second = client.post("/api/learn/start", json={"objective": "newer", "history": []}).json()["session_id"]
-    client.post(f"/api/learn/{first}/action", json={"action": "open_ex1", "payload": {}})
+    # A submission always runs a turn and saves its page (unlike opening an exercise, which is served
+    # from storage and touches nothing), so this is what actually bumps `first`'s updated_at.
+    client.post(f"/api/learn/{first}/action",
+               json={"action": "submit_ex1",
+                     "payload": {"exercise_id": "ex1", "file_name": "models.py", "code": "x"}})
 
     listing = client.get("/api/learn").json()["sessions"]
     assert [s["id"] for s in listing] == [first, second]
@@ -504,17 +508,20 @@ def test_second_simultaneous_action_gets_409(client, as_user):
 
     from app import routes
 
+    # A submission is what actually has to reach the lock: opening an exercise is served from storage
+    # and never gets there at all.
+    submit = {"action": "submit_ex1",
+             "payload": {"exercise_id": "ex1", "file_name": "models.py", "code": "x"}}
     lock = routes._turn_lock(sid)
     lock.acquire()
     try:
-        response = client.post(f"/api/learn/{sid}/action", json={"action": "open_ex1", "payload": {}})
+        response = client.post(f"/api/learn/{sid}/action", json=submit)
         assert response.status_code == 409
         assert response.json()["detail"] == "A turn is already running for this session"
     finally:
         lock.release()
     # The lock is released, so the next turn goes through.
-    assert client.post(f"/api/learn/{sid}/action",
-                       json={"action": "open_ex1", "payload": {}}).status_code == 200
+    assert client.post(f"/api/learn/{sid}/action", json=submit).status_code == 200
 
 
 def test_ask_does_not_create_a_page(client, as_user, database):

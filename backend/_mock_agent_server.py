@@ -18,64 +18,83 @@ class FakeSession:
         return workspace
 
     def send(self, message):
-        if "roadmap" in message.lower():
-            page = {
-                "roadmap": {
-                    "title": "Build a tiny URL shortener",
-                    "subtitle": "A scaled-down version of shlink/shlink",
+        # One of app.agent's per-exercise follow-ups (see _write_exercises) -- matched on its fixed
+        # prefix before the generic "open_ex1"/"open_ex2" checks below, because the follow-up message
+        # itself contains "open_action='open_ex1'" and would otherwise be mistaken for an action turn.
+        if message.startswith("Now write the full exercise page"):
+            if "open_action='open_ex1'" in message:
+                page = {
+                    "title": "Exercise 1: Data model",
                     "blocks": [
                         {
-                            "type": "markdown",
-                            "content": "We'll build a small clone of **shlink/shlink**, a real open-source "
-                            "URL shortener, one real component at a time.",
-                        },
-                        {
-                            "type": "stat_row",
-                            "stats": [{"label": "Exercises done", "value": "0 of 2"}],
-                        },
-                        {
-                            "type": "roadmap",
-                            "items": [
-                                {
-                                    "id": "ex1",
-                                    "title": "Data model",
-                                    "summary": "Define the Link record (original_url, short code).",
-                                    "status": "available",
-                                    "open_action": "open_ex1",
-                                },
-                                {
-                                    "id": "ex2",
-                                    "title": "Base62 encoder",
-                                    "summary": "Turn an integer id into a short code.",
-                                    "status": "locked",
-                                    "open_action": "open_ex2",
-                                },
-                            ],
-                        },
-                        {
-                            "type": "actions",
-                            "items": [{"action": "open_ex1", "label": "Start exercise 1", "style": "primary"}],
+                            "type": "code_editor",
+                            "exercise_id": "ex1",
+                            "file_name": "models.py",
+                            "language": "python",
+                            "instructions": "Define a `Link` dataclass with `original_url: str` and "
+                            "`code: str`.",
+                            "starter_code": "from dataclasses import dataclass\n\n\nclass Link:\n    pass\n",
+                            "submit_action": "submit_ex1",
                         },
                     ],
-                },
-                # Written in the same turn as the roadmap, while the cloned code would be in context: this
-                # is what a click on "open_ex1" is served from, without a second call to the model.
-                "exercises": [
+                }
+            elif "open_action='open_ex2'" in message:
+                page = {
+                    "title": "Exercise 2: Base62 encoder",
+                    "blocks": [
+                        {
+                            "type": "code_editor",
+                            "exercise_id": "ex2",
+                            "file_name": "encoding.py",
+                            "language": "python",
+                            "instructions": "Write `encode(n: int) -> str`, turning an integer id into a "
+                            "base62 short code.",
+                            "starter_code": "def encode(n: int) -> str:\n    pass\n",
+                            "submit_action": "submit_ex2",
+                        },
+                    ],
+                }
+            else:
+                page = {"title": "Unknown exercise", "blocks": []}
+        elif "roadmap" in message.lower():
+            # A plain page, no {"roadmap": ..., "exercises": [...]} wrapper: the roadmap and its
+            # exercises are now two separate conversation turns (see PAGE_SYSTEM_PROMPT), and
+            # app.agent._write_exercises is what asks for each exercise next, one at a time.
+            page = {
+                "title": "Build a tiny URL shortener",
+                "subtitle": "A scaled-down version of shlink/shlink",
+                "blocks": [
                     {
-                        "title": "Exercise 1: Data model",
-                        "open_action": "open_ex1",
-                        "blocks": [
+                        "type": "markdown",
+                        "content": "We'll build a small clone of **shlink/shlink**, a real open-source "
+                        "URL shortener, one real component at a time.",
+                    },
+                    {
+                        "type": "stat_row",
+                        "stats": [{"label": "Exercises done", "value": "0 of 2"}],
+                    },
+                    {
+                        "type": "roadmap",
+                        "items": [
                             {
-                                "type": "code_editor",
-                                "exercise_id": "ex1",
-                                "file_name": "models.py",
-                                "language": "python",
-                                "instructions": "Define a `Link` dataclass with `original_url: str` and "
-                                "`code: str`.",
-                                "starter_code": "from dataclasses import dataclass\n\n\nclass Link:\n    pass\n",
-                                "submit_action": "submit_ex1",
+                                "id": "ex1",
+                                "title": "Data model",
+                                "summary": "Define the Link record (original_url, short code).",
+                                "status": "available",
+                                "open_action": "open_ex1",
+                            },
+                            {
+                                "id": "ex2",
+                                "title": "Base62 encoder",
+                                "summary": "Turn an integer id into a short code.",
+                                "status": "locked",
+                                "open_action": "open_ex2",
                             },
                         ],
+                    },
+                    {
+                        "type": "actions",
+                        "items": [{"action": "open_ex1", "label": "Start exercise 1", "style": "primary"}],
                     },
                 ],
             }
