@@ -9,12 +9,50 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# backend/.env, loaded before anything reads the environment: seedagent and app.auth/db all take their
+# settings from os.environ, and a local run should need no exported variables. Read from an absolute path
+# next to this package rather than dotenv's default ".env", because the app is started from the repository
+# root as often as from backend/ and the default lookup would then find nothing -- which looks exactly like
+# "sign-in is not configured" even with a correct .env. override=False keeps a real environment variable
+# winning over the file, so a deployment's settings are never silently clobbered.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .auth import ensure_auth_configured, router as auth_router
+from .db import init_db
 from .routes import router
+
+
+class _DropProgressPolls(logging.Filter):
+    """Hide the activity-feed polls from uvicorn's access log.
+
+    The feed polls GET /api/learn/progress/<turn_id> every 600ms for the length of a turn (20-60s), so
+    one turn writes ~50-100 identical 200 lines. They buried the lines that matter -- the agent's own
+    `-> tool: ...` records and any real error -- and made a working turn look like a runaway loop. The
+    endpoint itself is unchanged; only its access-log line goes.
+
+    A filter on the access logger rather than a uvicorn flag, because uvicorn has no "exclude this path"
+    option and the app is started both through `python -m app` and directly with `uvicorn app.main:app`.
+    Attached at import, so it applies however the server is launched."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        # uvicorn passes (client, method, path, http_version, status) as the record's args; a plain
+        # string record (a startup banner, say) has none, and is always kept.
+        if isinstance(args, tuple) and len(args) >= 3:
+            return "/api/learn/progress/" not in str(args[2])
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_DropProgressPolls())
 
 app = FastAPI(title="LearnCode")
 
@@ -27,7 +65,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
 app.include_router(router)
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    """Create the schema, and refuse to start with a half-configured sign-in.
+
+    The database is also created lazily on first use (see db._ready), because the tests build a
+    TestClient without running these hooks -- so this is a fast fail for a misconfigured deployment
+    rather than the only thing standing between the app and a missing table."""
+    init_db()
+    ensure_auth_configured()
 
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 

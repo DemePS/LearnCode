@@ -110,6 +110,12 @@ main {
   margin-top: 12px;
 }
 
+/* The way in to the project list from the only screen a learner with no project ever sees. */
+.objective-form .btn-link {
+  display: block;
+  margin-top: 16px;
+}
+
 /* The pages the agent generates (roadmap, exercise, feedback) had no h1 rule of their own -- only
    .objective-form h1 and .feedback-details h1 existed -- so the roadmap title rendered at the
    browser default while the objective form's rendered at 1.4rem. Same size now, so entering a
@@ -158,6 +164,126 @@ main {
 }
 
 .error {
+  color: var(--bad);
+}
+
+/* The sign-in screen, and the signed-in learner in the top bar. */
+.signin {
+  max-width: 420px;
+  text-align: center;
+}
+
+.signin h1 {
+  margin-bottom: 12px;
+}
+
+.signin p {
+  color: var(--muted);
+  margin-bottom: 20px;
+}
+
+.signin .btn {
+  display: inline-block;
+  text-decoration: none;
+}
+
+.user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+}
+
+.user-login {
+  color: var(--muted);
+}
+
+/* The project list: one row per project, with the delete control on the row it belongs to. */
+.projects {
+  max-width: 720px;
+}
+
+.projects-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.projects-head h1 {
+  margin: 0;
+}
+
+.projects-head .btn {
+  margin-top: 0;
+  white-space: nowrap;
+}
+
+.projects-empty {
+  color: var(--muted);
+}
+
+.project-list {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0 0;
+}
+
+.project-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  margin-bottom: 10px;
+}
+
+/* The whole row is the "open" target, so the clickable area matches what looks clickable. */
+.project-open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-objective {
+  font-weight: 600;
+}
+
+.project-meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.project-confirm {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+.project-confirm-text {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.btn-danger {
   color: var(--bad);
 }
 
@@ -255,6 +381,14 @@ main {
 
 .code-editor-actions {
   margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The row already spaces itself, so the buttons' own stacking margin would push them out of line. */
+.code-editor-actions .btn {
+  margin-top: 0;
 }
 
 .block-feedback {

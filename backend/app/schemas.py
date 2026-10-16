@@ -5,6 +5,7 @@ it through, not know its shape."""
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel
@@ -60,6 +61,35 @@ class ProgressResponse(BaseModel):
 class PageResponse(BaseModel):
     session_id: str
     page: dict[str, Any]
+
+
+class SessionSummary(BaseModel):
+    """One row of the learner's project list -- enough to resume from a reload without naming the
+    project by hand, and nothing more (the pages themselves are fetched per session)."""
+
+    id: str
+    objective: str
+    updated_at: datetime
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionSummary] = []
+
+
+class ExerciseSummary(BaseModel):
+    """One row of a project's exercise list -- what the learner needs to pick an exercise, without
+    the starter code (that arrives with the exercise itself). Read straight from stored pages, so
+    listing exercises never costs a turn."""
+
+    exercise_id: str
+    title: str
+    file_name: str
+    language: str
+    open_action: str
+
+
+class ExerciseListResponse(BaseModel):
+    exercises: list[ExerciseSummary] = []
 
 
 class AskRequest(BaseModel):

@@ -38,7 +38,15 @@ export interface CodeEditorBlock {
   instructions: string;
   starter_code: string;
   submit_action: string;
+  /** The learner's own code, written here on submit. Absent until they submit, and it is what
+   * re-opening the exercise shows instead of the starter code. It lives on the block, where the
+   * editor that owns it reads it -- not on the page. */
+  draft?: ExerciseDraft;
 }
+
+/** The learner's own code, stored on the exercise page. Null until they submit, and it is what
+ * re-opening an exercise shows instead of the starter code. */
+export type ExerciseDraft = string | null | undefined;
 
 export interface FeedbackBlock {
   type: "feedback";
@@ -48,8 +56,11 @@ export interface FeedbackBlock {
 }
 
 export interface ActionItem {
+  /** The id the agent invented and gets back verbatim. The button's wording is derived from this
+   * (see components/actionLabel.ts) -- `label` is only present on pages the agent wrote before it
+   * stopped sending one, and is ignored. */
   action: string;
-  label: string;
+  label?: string;
   style?: "primary" | "secondary";
 }
 
@@ -114,4 +125,37 @@ export interface ProgressStep {
 export interface ProgressResponse {
   steps: ProgressStep[];
   done: boolean;
+}
+
+/** Who the browser is signed in as (GET /api/auth/me). The GitHub token is deliberately absent: it
+ * never leaves the server (see backend/app/auth.py). */
+export interface Me {
+  login: string;
+  name: string | null;
+  avatar_url: string | null;
+}
+
+/** One entry of GET /api/learn: enough to resume a project without naming it by hand. */
+export interface SessionSummary {
+  id: string;
+  objective: string;
+  updated_at: string;
+}
+
+export interface SessionListResponse {
+  sessions: SessionSummary[];
+}
+
+/** One entry of GET /api/learn/{id}/exercises: enough to list a project's exercises and open one,
+ * without the starter code (that arrives with the exercise itself). */
+export interface ExerciseSummary {
+  exercise_id: string;
+  title: string;
+  file_name: string;
+  language: string;
+  open_action: string;
+}
+
+export interface ExerciseListResponse {
+  exercises: ExerciseSummary[];
 }

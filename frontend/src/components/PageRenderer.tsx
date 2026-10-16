@@ -14,6 +14,7 @@ import { Feedback } from "./blocks/Feedback";
 import { Markdown } from "./blocks/Markdown";
 import { Roadmap } from "./blocks/Roadmap";
 import { StatRow } from "./blocks/StatRow";
+import { EMPTY_INDEX, type ExerciseIndex } from "./actionLabel";
 
 // Monaco (every language it ships, several MB) is the single biggest thing this app loads; code-
 // splitting it here means the objective form, roadmap and feedback pages stay fast, and the cost is
@@ -37,6 +38,8 @@ function renderBlock(
   onAction: OnAction,
   submitting: boolean,
   onCodeChange: OnCodeChange,
+  index: ExerciseIndex,
+  draft?: string | null,
 ) {
   switch (block.type) {
     case "markdown":
@@ -55,14 +58,16 @@ function renderBlock(
           key={`code-${codeBlock.exercise_id}`}
           fallback={<div className="block block-code-editor-loading">Loading editor…</div>}
         >
-          <CodeEditor block={codeBlock} onAction={onAction} submitting={submitting} onCodeChange={onCodeChange} />
+          <CodeEditor block={codeBlock} draft={draft} onAction={onAction} submitting={submitting}
+                      onCodeChange={onCodeChange} />
         </Suspense>
       );
     }
     case "feedback":
       return <Feedback key={key} block={block as FeedbackBlock} />;
     case "actions":
-      return <Actions key={key} block={block as ActionsBlock} onAction={onAction} submitting={submitting} />;
+      return <Actions key={key} block={block as ActionsBlock} index={index} onAction={onAction}
+                      submitting={submitting} />;
     default:
       return null;
   }
@@ -89,6 +94,7 @@ export function PageRenderer({
   onAction,
   submitting,
   onCodeChange = () => {},
+  index = EMPTY_INDEX,
 }: {
   page: Page;
   onAction: OnAction;
@@ -98,12 +104,17 @@ export function PageRenderer({
    * code from the last page the agent sent. Optional: a caller that doesn't need live code (e.g. a
    * future embed of this renderer) can omit it. */
   onCodeChange?: OnCodeChange;
+  /** The roadmap's exercises, so a button on a feedback page (which carries no roadmap of its own)
+   * can still be labelled "Retry exercise 6". Defaults to empty, which falls back to wording derived
+   * from the action id alone. */
+  index?: ExerciseIndex;
 }) {
   return (
     <div className="page">
       <h1>{page.title}</h1>
       {page.subtitle && <p className="page-subtitle">{page.subtitle}</p>}
-      {dedupeCodeEditors(page.blocks).map((block, i) => renderBlock(block, i, onAction, submitting, onCodeChange))}
+      {dedupeCodeEditors(page.blocks).map((block, i) =>
+        renderBlock(block, i, onAction, submitting, onCodeChange, index, page.draft))}
     </div>
   );
 }

@@ -28,11 +28,13 @@ interface Props {
   turnId: string;
   /** Whether a turn is currently running. Polling stops as soon as it is false. */
   active: boolean;
+  /** Headline for the turn being run. Defaults to the roadmap wording, which is the common case. */
+  title?: string;
   /** Defaults to the real endpoint. */
   source?: ProgressSource;
 }
 
-export function ActivityFeed({ turnId, active, source = getProgress }: Props) {
+export function ActivityFeed({ turnId, active, title = "Building your tailored project", source = getProgress }: Props) {
   const [steps, setSteps] = useState<ProgressStep[]>([]);
   // Guards against a late response from a previous turn overwriting the current one's feed.
   const current = useRef(turnId);
@@ -79,7 +81,7 @@ export function ActivityFeed({ turnId, active, source = getProgress }: Props) {
   return (
     <div className="working" role="status" aria-live="polite">
       <div className="working-spinner" aria-hidden="true" />
-      <h2 className="working-title">Building your tailored project</h2>
+      <h2 className="working-title">{title}</h2>
       <p className="working-step">{text}</p>
     </div>
   );

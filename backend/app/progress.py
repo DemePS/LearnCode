@@ -43,12 +43,16 @@ def _prune_locked(now: float) -> None:
         del _TURNS[turn_id]
 
 
-def start(turn_id: str, label: str = "Thinking") -> None:
-    """Begin (or restart) the feed for a turn."""
+def start(turn_id: str, owner_id: int | None = None, label: str = "Thinking") -> None:
+    """Begin (or restart) the feed for a turn.
+
+    `owner_id` records which learner asked for this turn, so /progress/{turn_id} can refuse to show
+    one learner's activity (file paths, repository names) to another. In-memory and per process, like
+    everything else here: a turn's feed is worthless the moment it returns."""
     now = time.time()
     with _LOCK:
         _prune_locked(now)
-        _TURNS[turn_id] = {"label": label, "steps": [], "updated": now}
+        _TURNS[turn_id] = {"label": label, "steps": [], "updated": now, "owner": owner_id}
 
 
 def step(turn_id: str, text: str, *, kind: str = "work", ok: bool | None = None) -> None:
@@ -121,11 +125,26 @@ def finish(turn_id: str) -> None:
         entry["updated"] = time.time()
 
 
-def snapshot(turn_id: str) -> dict[str, Any] | None:
-    """What the frontend polls: the turn's steps in order, plus whether it has finished."""
+def owns(turn_id: str, user_id: int | None) -> bool:
+    """Whether this learner may watch this turn's feed. A turn with no recorded owner (an older entry,
+    or one started without an identity) is nobody's, so it stays private to whoever ran it."""
     with _LOCK:
         entry = _TURNS.get(turn_id)
         if entry is None:
+            return False
+        return entry.get("owner") is not None and entry.get("owner") == user_id
+
+
+def snapshot(turn_id: str, user_id: int | None = None) -> dict[str, Any] | None:
+    """What the frontend polls: the turn's steps in order, plus whether it has finished.
+
+    Passing a `user_id` restricts the answer to that learner's own turns; the feed names repositories
+    and file paths, which is not something another signed-in learner should be able to read."""
+    with _LOCK:
+        entry = _TURNS.get(turn_id)
+        if entry is None:
+            return None
+        if user_id is not None and entry.get("owner") not in (None, user_id):
             return None
         return {
             "steps": list(entry["steps"]),
