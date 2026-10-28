@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import agent, progress, store
+from . import agent, progress, ratelimit, store
 from .auth import current_user, optional_user
 from .db import LearnSession, User
 from .page_schema import RESERVED_ACTION as SHOW_ROADMAP_ACTION
@@ -92,12 +92,19 @@ async def clarify(body: ClarifyRequest, user: User = Depends(current_user)) -> C
     then calls /start with the same objective and history.
 
     Needs a signed-in learner even though it creates nothing: it costs a model call, so leaving it
-    open would let anyone spend the operator's budget anonymously."""
+    open would let anyone spend the operator's budget anonymously.
+
+    Rate-limited like the turn routes: the frontend calls this once per clarifying question, but nothing
+    stopped a client from looping it (see app/ratelimit.py)."""
     objective = body.objective.strip()
     if not objective:
         raise HTTPException(400, "objective must not be empty")
-    history = [{"question": t.question, "answer": t.answer} for t in body.history]
-    result = await run_in_threadpool(agent.clarify, objective, history)
+    slot = ratelimit.acquire_turn_slot(user.id)
+    try:
+        history = [{"question": t.question, "answer": t.answer} for t in body.history]
+        result = await run_in_threadpool(agent.clarify, objective, history)
+    finally:
+        slot.release()
     if result["ready"]:
         return ClarifyResponse(ready=True)
     return ClarifyResponse(ready=False, question=result["question"])
@@ -121,6 +128,8 @@ async def start(body: StartRequest, user: User = Depends(current_user)) -> PageR
     objective = body.objective.strip()
     if not objective:
         raise HTTPException(400, "objective must not be empty")
+    # Before any row or directory is created: a refused request must leave nothing behind.
+    slot = ratelimit.acquire_turn_slot(user.id)
     session_id = store.new_session_id()
     # The row is created before the turn runs, so the session is owned from the moment it exists --
     # an interrupted /start leaves an owned, resumable session rather than an orphan directory.
@@ -137,12 +146,14 @@ async def start(body: StartRequest, user: User = Depends(current_user)) -> PageR
         progress.start(body.turn_id, user.id)
     lock = _turn_lock(session_id)
     if not lock.acquire(blocking=False):
+        slot.release()
         raise HTTPException(409, "A turn is already running for this session")
     try:
         result = await run_in_threadpool(agent.run_turn, workspace, message, False, body.turn_id,
                                          user.token(), True, "Thinking about your objective")
     finally:
         lock.release()
+        slot.release()
     page = result.page
     # The exercises the roadmap turn invented are stored with it: each is answerable later by its
     # open_action, which is what makes clicking a roadmap item a database read instead of a turn.
@@ -265,16 +276,21 @@ async def act(session_id: str, body: ActionRequest, user: User = Depends(current
         "Continue the experience and return the next page JSON."
     )
     workspace = store.workspace_for(session_id)
+    # Everything above is a database read or a stored-page hit, so it stays free and unthrottled; only a
+    # request that reached this point is about to spend a model call.
+    slot = ratelimit.acquire_turn_slot(user.id)
     if body.turn_id:
         progress.start(body.turn_id, user.id)
     lock = _turn_lock(session_id)
     if not lock.acquire(blocking=False):
+        slot.release()
         raise HTTPException(409, "A turn is already running for this session")
     try:
         result = await run_in_threadpool(agent.run_turn, workspace, message, True, body.turn_id,
                                          user.token(), False, opening)
     finally:
         lock.release()
+        slot.release()
     page = result.page
     # The action id is stored with the page: it is what lets a later "show me this screen again" be a
     # database read rather than a re-run of the turn that produced it.
@@ -310,11 +326,14 @@ async def ask(session_id: str, body: AskRequest, user: User = Depends(current_us
     if not question:
         raise HTTPException(400, "question must not be empty")
     workspace = store.workspace_for(session_id)
+    slot = ratelimit.acquire_turn_slot(user.id)
     lock = _turn_lock(session_id)
     if not lock.acquire(blocking=False):
+        slot.release()
         raise HTTPException(409, "A turn is already running for this session")
     try:
         answer = await run_in_threadpool(agent.ask, workspace, question, body.context, user.token())
     finally:
         lock.release()
+        slot.release()
     return AskResponse(answer=answer)

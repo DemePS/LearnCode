@@ -7,6 +7,7 @@ supported way in: it passes the --reload-exclude flags the app needs), or with
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,6 +21,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -54,13 +56,36 @@ class _DropProgressPolls(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(_DropProgressPolls())
 
-app = FastAPI(title="LearnCode")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Create the schema, and refuse to start half-configured.
+
+    The database is also created lazily on first use (see db._ready), because the tests build a
+    TestClient without running these hooks -- so this is a fast fail for a misconfigured deployment
+    rather than the only thing standing between the app and a missing table."""
+    init_db()
+    ensure_auth_configured()
+    _ensure_model_configured()
+    yield
+
+
+app = FastAPI(title="LearnCode", lifespan=_lifespan)
 
 # The Vite dev server runs on its own port and calls this API directly; harmless in production
-# where the backend serves the built SPA itself (same origin, so CORS is not even exercised).
+# where the backend serves the built SPA itself (same origin, so CORS is not even exercised). A
+# deployment that serves the API on its own domain and the SPA elsewhere sets LEARNCODE_CORS_ORIGINS to
+# a comma-separated list; unset keeps the dev defaults so a local run needs no configuration.
+_cors_origins = [
+    o.strip()
+    for o in (os.environ.get("LEARNCODE_CORS_ORIGINS") or "").split(",")
+    if o.strip()
+] or ["http://localhost:5173", "http://127.0.0.1:5173"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_cors_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -69,17 +94,67 @@ app.include_router(auth_router)
 app.include_router(router)
 
 
-@app.on_event("startup")
-async def _startup() -> None:
-    """Create the schema, and refuse to start with a half-configured sign-in.
+@app.get("/health", include_in_schema=False)
+def health() -> dict:
+    """Liveness for the platform's health check (and for a container orchestrator's readiness probe).
+
+    Deliberately touches the database: the app is useless without it, and a process that has started but
+    cannot open its SQLite file would otherwise report healthy forever. It does NOT check the model API
+    -- an outage there should not take the whole app out of rotation, because browsing stored pages still
+    works and the learner only loses the ability to run new turns."""
+    from sqlalchemy import text
+
+    from . import db
+
+    try:
+        # `_ready()` is the app's own lazy initialiser: it creates the schema on first use and returns
+        # the session factory, so this checks exactly what a real request would depend on.
+        with db._ready()() as session:
+            session.execute(text("SELECT 1"))
+    except Exception as e:  # noqa: BLE001 - any failure here means "not ready"
+        from fastapi import HTTPException
+
+        raise HTTPException(503, f"database unavailable: {e}") from e
+    return {"status": "ok"}
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Create the schema, and refuse to start half-configured.
 
     The database is also created lazily on first use (see db._ready), because the tests build a
     TestClient without running these hooks -- so this is a fast fail for a misconfigured deployment
     rather than the only thing standing between the app and a missing table."""
     init_db()
     ensure_auth_configured()
+    _ensure_model_configured()
+    yield
 
-_FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
+def _ensure_model_configured() -> None:
+    """Fail at boot, not on the learner's first turn, when no model credential is reachable.
+
+    seedagent can reach a model three ways: an API key (Anthropic, or DeepSeek's compatible endpoint),
+    a Foundry key, or Azure AD. Only the first two are readable from the environment, so a missing key
+    here is reported only when *nothing* else could work -- an Azure AD deployment has no key by design
+    and must not be refused. Checking it this way turns the most common deploy mistake (a .env without
+    the key) into a startup failure instead of a turn that fails for every visitor."""
+    from seedagent import config
+
+    if not config.uses_anthropic_api():
+        # Foundry path: either a key, or Azure AD, which needs no static check from here.
+        return
+    if config.current_api_key():
+        return
+    raise RuntimeError(
+        "No model API key is configured. Set ANTHROPIC_API_KEY, or the provider key seedagent reads "
+        "for CODEAGENT_PROVIDER (see backend/.env.example); without one every turn fails."
+    )
+
+_FRONTEND_DIST = Path(
+    os.environ.get("LEARNCODE_FRONTEND_DIST")
+    or Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+)
 
 if _FRONTEND_DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="assets")
@@ -105,17 +180,24 @@ if __name__ == "__main__":
     # relying on the command line means the supported way to start the server cannot forget them.
     #
     # Reload is opt-in: `python -m app` serves without it, and `python -m app --reload` turns it on.
+    #
+    # Host and port come from the environment so the same entrypoint works in a container: the default
+    # stays 127.0.0.1:8000 for a local run, and LEARNCODE_HOST=0.0.0.0 makes it reachable from outside
+    # (a container that binds only to loopback is unreachable from the platform's router).
     import sys
 
     import uvicorn
 
+    host = os.environ.get("LEARNCODE_HOST", "127.0.0.1")
+    port = int(os.environ.get("LEARNCODE_PORT", "8000"))
+
     if "--reload" in sys.argv:
         uvicorn.run(
             "app.main:app",
-            host="127.0.0.1",
-            port=8000,
+            host=host,
+            port=port,
             reload=True,
             reload_excludes=["data/*", "data/**", "*/data/*", "*/data/**"],
         )
     else:
-        uvicorn.run(app, host="127.0.0.1", port=8000)
+        uvicorn.run(app, host=host, port=port, proxy_headers=True, forwarded_allow_ips="*")

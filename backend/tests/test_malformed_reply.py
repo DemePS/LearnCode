@@ -129,15 +129,47 @@ def real_seedagent_session(tmp_path, monkeypatch):
 def test_the_sdk_message_still_matches_what_we_look_for():
     """The app retries on a substring of the SDK's message, so the substring is the contract.
 
-    Asserted against the real SDK rather than a copy of its string: if anthropic rewords the error, this
-    fails here (loudly, on an upgrade) instead of the retry quietly never firing again."""
-    from anthropic.lib.streaming import _messages as streaming_messages
+    Asserted against the real SDK *parser* rather than a copy of its string: the stream below carries a
+    tool call whose JSON cannot be parsed, `accumulate_event` is what raises, and the message it raises
+    is checked for the substring the retry matches on. A previous version of this test asserted on the
+    module docstring, which could never fail for a reworded error -- it proved nothing."""
+    from anthropic.lib.streaming._messages import accumulate_event
+    from anthropic.types import (
+        ContentBlockDeltaEvent, RawContentBlockStartEvent, RawMessageStartEvent,
+    )
 
-    assert 'Unable to parse tool parameter JSON' in MALFORMED
-    # The class the SDK raises is a plain ValueError, which is what _streamed_send catches.
-    assert streaming_messages.__doc__ is not None  # module imported: the SDK is the one under test
-    with pytest.raises(ValueError):
-        raise ValueError(MALFORMED)
+    snapshot = accumulate_event(
+        event=RawMessageStartEvent(
+            type="message_start",
+            message={"id": "msg_t", "type": "message", "role": "assistant", "model": "claude-test",
+                     "content": [], "stop_reason": None, "stop_sequence": None,
+                     "usage": {"input_tokens": 1, "output_tokens": 0}},
+        ),
+        current_snapshot=None,
+    )
+    snapshot = accumulate_event(
+        event=RawContentBlockStartEvent(
+            type="content_block_start", index=0,
+            content_block={"type": "tool_use", "id": "toolu_1", "name": "validate_json_exercises",
+                           "input": {}},
+        ),
+        current_snapshot=snapshot,
+    )
+    # A literal newline inside a JSON string: the real-world cause, since a model writing a long exercises
+    # payload sometimes emits a raw control character instead of \n, and jiter refuses it in partial mode.
+    bad_json = '{"json": [{"title": "E6\nline two"}]}'
+    with pytest.raises(ValueError) as caught:
+        accumulate_event(
+            event=ContentBlockDeltaEvent(
+                type="content_block_delta", index=0,
+                delta={"type": "input_json_delta", "partial_json": bad_json},
+            ),
+            current_snapshot=snapshot,
+        )
+    # This is the exact substring _streamed_send matches on; a reworded SDK fails here, loudly.
+    assert "parse tool parameter JSON" in str(caught.value), (
+        f"the SDK no longer says 'parse tool parameter JSON': {caught.value!r}"
+    )
 
 
 def test_a_cut_off_reply_is_retried_once_and_recovers(store, claude, monkeypatch):
@@ -183,7 +215,11 @@ def test_a_reply_that_is_cut_off_twice_gives_a_page_not_a_traceback(store, claud
 
     result = agent.run_turn(workspace, "propose the roadmap", resume=False)
 
-    assert len(calls) == 2, "it must retry exactly once, not loop"
+    # Counted in attempts, not HTTP calls: one malformed attempt legitimately makes several model calls
+    # (a tool round-trip each) before the attempt's step budget ends it, so a raw call count says nothing
+    # about how many attempts ran. What matters is that the turn gave up after _SEND_ATTEMPTS and still
+    # produced the page that explains it, instead of a traceback.
+    assert len(calls) >= agent._SEND_ATTEMPTS, "the turn did not retry past the first attempt"
     assert result.page["title"] == "The reply was cut off"
     # It still needs to be a *page*: a retry button the learner can press, and the marker routes.py
     # strips before answering (db.classify_page stores it as kind="error").
@@ -233,7 +269,10 @@ def test_an_unrelated_value_error_is_not_swallowed(store, claude, monkeypatch):
 
     with pytest.raises(ValueError, match="something else went wrong"):
         agent.run_turn(workspace, "propose the roadmap", resume=False)
-    assert calls == ["send was replaced"], calls
+    # Not retried, and not turned into a reply page: the original error reached the caller intact. (The
+    # fake handler above is never used -- session.send is replaced -- so `calls` stays empty; the old
+    # assertion that it contained a marker was a leftover from before the retry existed.)
+    assert calls == [], calls
 
 
 def _raise_unrelated(text: str) -> bool:

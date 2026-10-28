@@ -25,6 +25,7 @@ seedagent = { git = "https://github.com/DemePS/CodeAgent", branch = "keyed_sessi
 [dependency-groups]
 dev = [
     "pytest>=8,<9",
+    "pytest-timeout>=2.3",
     "httpx>=0.27,<1",
 ]
 
@@ -38,6 +39,10 @@ build-backend = "hatchling.build"
 # import -- yfinance, in the first real clone -- which looks like a failure of this project's suite.
 testpaths = ["tests"]
 norecursedirs = ["data", ".venv", "*.egg"]
+# CI runs this file; a test that hangs must fail the build rather than hold the runner for hours. The
+# suite used to hang outright on a looping model reply (fixed in app/agent.py), and without a timeout
+# that showed up as a job that never ended.
+addopts = "--timeout=120"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

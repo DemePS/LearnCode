@@ -1,0 +1,47 @@
+# One-command deployment from the project root (the folder holding backend/ and frontend/):
+#
+#   cp backend/.env.example .env    # then fill in the model key and the OAuth app
+#   docker compose up -d --build
+#
+# A single app container and nothing else. The app is single-process by design (in-memory progress feed,
+# session locks and rate limits -- see the Dockerfile's --workers note), so Postgres and a reverse proxy
+# are deliberately not here: SQLite in a volume is enough for one instance, and TLS belongs to whatever
+# proxy the host already runs. Add them when the app is actually scaled out (see TODO.md).
+services:
+  learncode:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Locally this builds from source; on the host the deploy workflow sets LEARNCODE_IMAGE to the exact
+    # digest it pushed and compose pulls it instead (see .github/workflows/deploy.yml).
+    image: ${LEARNCODE_IMAGE:-learncode:latest}
+    restart: unless-stopped
+    # Secrets come from .env (git-ignored) or the host environment, never baked into the image. The app
+    # refuses to start without a model key (backend/app/agent.py), so a misconfigured deploy fails at
+    # startup instead of answering errors on every turn.
+    env_file:
+      - .env
+    environment:
+      LEARNCODE_HOST: 0.0.0.0
+      LEARNCODE_PORT: 8000
+      LEARNCODE_DATA_DIR: /data
+    ports:
+      # Loopback only: put the host's reverse proxy (Caddy/nginx/Traefik) in front for TLS. Change to
+      # "8000:8000" only on a network you trust.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Every learner's workspace, the SQLite database and the GitHub cache live here. Without this
+      # mount, `up --build` wipes the whole platform.
+      - learncode-data:/data
+    # A turn is a 20-60s blocking call on a worker thread; leave headroom beyond
+    # LEARNCODE_MAX_CONCURRENT_TURNS (default 4) x ~400MB.
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  learncode-data:

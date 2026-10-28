@@ -1,0 +1,129 @@
+name: CI
+
+# Runs on every push and pull request: the backend suite, the SPA's type-checked build, and a build of
+# the deployable image. The image step is what catches "works locally, breaks in the container" --
+# above all a missing `git` (seedagent is a git dependency and the agent clones repositories).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # So the Deploy pipeline can reuse this one instead of keeping a second copy of the commands.
+  workflow_call:
+
+# A second push to the same branch cancels the first: the suite takes minutes and only the newest
+# commit's result matters.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      # --frozen: the lockfile is the source of truth; a pyproject change without a lock update fails
+      # here instead of silently resolving a different dependency tree than production.
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run the suite
+        working-directory: backend
+        env:
+          # The suite's fake model server needs no network, but the app refuses to start without a
+          # configured model; a dummy value keeps that check honest without a real secret.
+          CODEAGENT_MODEL: test-model
+          # The tests set their own data dir and database; be explicit so a stray real one is never
+          # touched.
+          LEARNCODE_DATA_DIR: ${{ runner.temp }}/learncode-data
+        run: |
+          mkdir -p "$LEARNCODE_DATA_DIR"
+          uv run pytest -q --timeout=120
+
+  frontend:
+    name: frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # npm ci, not install: builds from the lockfile and fails if it has drifted from package.json.
+      - run: npm ci
+
+      # `build` runs `tsc -b` first (see package.json), so this is also the type-check: a type error
+      # fails the build rather than shipping.
+      - run: npm run build
+
+      - name: Upload the built SPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 7
+
+  image:
+    name: image builds
+    runs-on: ubuntu-latest
+    # The Dockerfile builds the SPA itself, so this only needs the backend job to be green -- a broken
+    # image is worth knowing about before a deploy, not after.
+    needs: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only: no registry is configured, so this proves the image compiles without publishing it.
+      # Add a `push: true` step with registry credentials when there is somewhere to push to.
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: learncode:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A built image is not a working image. Start it against a throwaway database and require the
+      # health endpoint to answer -- this is where a missing git, a bad path or an unrunnable CMD shows.
+      # The port is published to the runner (the image only EXPOSEs it), and `-i` forwards the
+      # container's fallback model settings, since no real secret is available in CI.
+      - name: Smoke-test the image
+        run: |
+          set -eu
+          docker run -d --name smoke -p 8000:8000 \
+            -e CODEAGENT_MODEL=test-model \
+            -e LEARNCODE_DATA_DIR=/data \
+            learncode:ci
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health; then ok=1; echo "healthy"; break; fi
+            sleep 2
+          done
+          echo "--- container logs ---"
+          docker logs smoke || true
+          docker rm -f smoke || true
+          # Fail the job *after* printing the logs: a bare exit would hide why the container died.
+          test "$ok" = "1"

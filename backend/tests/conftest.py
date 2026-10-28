@@ -61,6 +61,20 @@ def gh(data_dir, monkeypatch):
     yield github_lookup
 
 
+@pytest.fixture(autouse=True)
+def fresh_rate_limits():
+    """Start every test with an empty rate-limit table.
+
+    app/ratelimit.py counts per user in process memory, so without this the suite's own turns would
+    spend the budget and later tests would get 429s -- a real behaviour, but one that belongs in the
+    dedicated tests, not in an unrelated one."""
+    from app import ratelimit
+
+    ratelimit.reset()
+    yield
+    ratelimit.reset()
+
+
 @pytest.fixture()
 def user_factory(database):
     """Create users on demand -- most tests need two, to prove one cannot reach the other's data."""

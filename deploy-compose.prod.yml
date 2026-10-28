@@ -1,0 +1,23 @@
+# Production overrides, applied on top of the base file by the deploy workflow:
+#
+#   docker compose -f docker-compose.yml -f deploy-compose.prod.yml up -d
+#
+# Only what differs on a real host. Everything else (health check, volume, non-root user, --workers 1)
+# is inherited from docker-compose.yml so there is one definition of how the app runs.
+services:
+  learncode:
+    # The image comes from GHCR and is pinned per commit by the workflow; there is no source to build
+    # on the host, and building there would need the whole repository checked out.
+    build: !reset null
+    image: ${LEARNCODE_IMAGE:?set by the deploy workflow}
+    pull_policy: always
+    # Host-side logging: without a cap, json-file logs grow until the disk fills, and a full disk takes
+    # SQLite down with it. 30MB keeps a few days of a busy instance.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    # Do not go back to an older container if the new one keeps failing its health check: the deploy
+    # workflow fails instead, and an operator can roll back deliberately to a previous :sha tag.
+    restart: unless-stopped

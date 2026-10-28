@@ -1,0 +1,29 @@
+# Keeps the local development state out of the image.
+#
+# `COPY backend/ ./` in the Dockerfile would otherwise carry the developer's 1.2 MB learncode.db, the
+# 1.3 MB github_cache.json and every learner workspace under backend/data/workspaces/ into the image --
+# publishing real user data with the container, and bloating it by over a hundred megabytes.
+
+# Development state and secrets
+backend/data/
+backend/.env
+.env
+
+# Python
+**/__pycache__/
+**/*.pyc
+backend/.venv/
+**/*.egg-info/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Version control and CI (git is only needed at run time, for cloning)
+.git/
+.github/
+
+# Local scratch
+**/*.log
+backend/tsconfig.tsbuildinfo
+frontend/tsconfig.tsbuildinfo

@@ -256,6 +256,11 @@ Rules:
   The retry button's `action` must be the same id the roadmap item carries, so clicking it is served
   from the stored exercise instead of running another turn. Never silently mark something passed that
   genuinely isn't -- be a fair, specific grader.
+  **A failed submission's page is the feedback page, and that is where the retry button goes** -- below
+  the `feedback` block, on the same page, never on the exercise page itself (which carries no `actions`
+  block at all, see above). The learner reads why they failed and clicks "Retry exercise N" from there;
+  the retried exercise is re-shown with their own last submitted code (see /action in routes.py), so
+  there is no need to ask them to re-submit what they already typed.
 - Keep going until every roadmap item is "done"; the last feedback page should congratulate the
   learner on the finished project and summarize what they built.
 - Never add an action whose purpose is just to ask you a question or get help ("ask a question",
@@ -430,6 +435,45 @@ class CaptureUI(UI):
         # When set, every tool call is also published to app/progress.py so the browser can show what
         # the agent is doing while the turn runs (see that module). Empty means "log only".
         self._turn_id = turn_id
+        # Model calls made in this attempt, and the cap that makes a looping model cheap to give up on
+        # (see _max_steps_per_attempt and note_tool_call).
+        self._steps = 0
+        self._step_budget = _max_steps_per_attempt()
+        # Set when the budget below cut the attempt short, so a truncated turn is never mistaken for a
+        # reply that simply had nothing to say (both leave final_text empty).
+        self._step_budget_exhausted = False
+        # Why the last reply produced nothing usable. `empty_reason` is the short one the retry logs;
+        # `empty_notice` is a warning seedagent itself emitted about the reply, which is what a turn that
+        # "completes" with no page almost always turns on (see reset_reply/ended_empty).
+        self.empty_reason = ""
+        self.empty_notice = ""
+
+    def reset_reply(self) -> None:
+        """Forget the previous attempt's output, so one empty reply cannot be mistaken for the next
+        attempt's success. Called before each send, never between the chunks of one reply."""
+        self._buffer = ""
+        self._spoken = ""
+        self.final_text = ""
+        self.empty_reason = ""
+        self.empty_notice = ""
+        self._steps = 0
+        self._step_budget_exhausted = False
+
+    def ended_empty(self) -> bool:
+        """Whether the turn that just finished left nothing worth showing the learner.
+
+        A page is the only success: the text streamed from the last response is what the page is
+        extracted from (see _extract_page), and an empty buffer means there is nothing to extract.
+        `empty_notice` covers the case where the loop itself reported the reply was unconsumable -- that
+        is a malformed reply even if a little prose came through.
+        """
+        if self.empty_reason:
+            return True
+        if self.empty_notice:
+            return True
+        if self._step_budget_exhausted:
+            return True
+        return not (self.final_text.strip() or self._buffer.strip())
 
     def confirm(self, question: str, choices: tuple[str, ...] = ("yes", "no")) -> str:
         # No person is attached to a background turn, so a question has to be answered here rather
@@ -451,6 +495,9 @@ class CaptureUI(UI):
 
     def error(self, text: str) -> None:
         self.error_text = text
+        # Recorded for the retry too: an unconsumable reply surfaces through the loop as an error, and
+        # that is exactly the failure worth one more attempt (see _send_message).
+        self.empty_reason = (text or "").strip() or "the model reported an error"
         _log.error("%sseedagent error: %s", self._prefix, text)
 
     def status(self, text: str) -> None:
@@ -458,15 +505,43 @@ class CaptureUI(UI):
 
     def message(self, text: str) -> None:
         _log.info("%s%s", self._prefix, text)
+        # The loop reports a turn that stopped without an answer this way -- "reached AGENT_MAX_STEPS",
+        # "hit max_tokens", "interrupted", "declined". None of those leave a page, so the attempt is
+        # wasted exactly like a cut-off reply and must be retried (see ended_empty). A repeated
+        # unparseable tool call lands here too: the model keeps asking for the same tool and the loop
+        # only stops at the step cap, so without this the turn "succeeds" with nothing to show.
+        low = (text or "").lower()
+        if text and (
+            "agent_max_steps" in low
+            or "hit max_tokens" in low
+            or text.strip() in ("[interrupted]", "[the model declined this request]")
+        ):
+            self.empty_notice = text.strip()
 
     def warning(self, text: str) -> None:
         _log.warning("%s%s", self._prefix, text)
+        # The loop stops asking for tools after MAX_STEPS and says so with a warning. The turn then
+        # "completes" with no page, which is indistinguishable from a cut-off reply at the return value --
+        # so it is remembered here and makes the attempt count as failed (see ended_empty).
+        low = (text or "").lower()
+        if "tool" in low and ("step" in low or "limit" in low):
+            self.empty_notice = text.strip()
 
     def thinking(self) -> None:
         _log.debug("%sthinking...", self._prefix)
 
     def tool_start(self, name: str) -> None:
         _log.info("%s-> tool: %s", self._prefix, name)
+        # One tool call == one model call in seedagent's loop, so this is the step count. A model stuck
+        # repeating the same unparseable tool call would otherwise run the whole AGENT_MAX_STEPS budget
+        # (100 calls) before the turn ends with nothing; trip the budget here instead so the attempt is
+        # abandoned quickly and _streamed_send's retry gets its turn (see _max_steps_per_attempt).
+        self._steps += 1
+        if self._steps == self._step_budget:
+            _log.warning("%sstep budget reached (%d tool calls) -- ending this attempt",
+                         self._prefix, self._steps)
+            self._step_budget_exhausted = True
+            session.stop()
         if self._turn_id:
             progress.step(self._turn_id, _describe_tool(name), kind="work")
 
@@ -535,6 +610,29 @@ def _max_concurrent_turns() -> int:
         return max(1, int(os.environ.get("LEARNCODE_MAX_CONCURRENT_TURNS", "4")))
     except ValueError:
         return 4
+
+
+def _max_steps_per_attempt() -> int:
+    """How many model calls one *attempt* may take before it is treated as a wasted reply.
+
+    seedagent bounds a turn at AGENT_MAX_STEPS (100 by default) model calls, and its loop counts every
+    tool round-trip as one. A model that keeps asking for the same tool -- the malformed `validate_json_
+    exercises` call is the measured case, where the truncated JSON never parses so the tool result is
+    the same error every time -- therefore runs for the full 100 calls before the turn gives up, holding
+    a worker slot and spending API credit the whole way. With the retry below, one bad reply could cost
+    3 x 100 calls. Lowering the cap for the *attempt* makes each try cheap: a real turn needs well under
+    this, and a looping one is cut off here and retried instead.
+
+    Set it as an explicit lower value rather than relying on an inherited environment: this process may
+    be started by a tool whose own AGENT_MAX_STEPS (1000) means something else entirely."""
+    default = 24
+    raw = os.environ.get("LEARNCODE_MAX_STEPS_PER_ATTEMPT")
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
 
 
 # Caps how many turns may run at once across all learners. Not a correctness device (each turn has its
@@ -681,20 +779,47 @@ def _streamed_send(ui: CaptureUI, message: str, attempts: int = _SEND_ATTEMPTS) 
     attempt is a new answer, not the same broken one. The dead turn's history is already dropped by
     seedagent (loop.send deletes the unfinished turn), so nothing partial is carried into the retry.
 
-    Only this ValueError is retried. Every other exception keeps seedagent's own handling, where the
-    explanation reaches the learner through ui.error_text. The last attempt is not caught, so the
-    caller's handler still turns a persistent failure into the page that explains it."""
+    Two shapes of the same failure are retried, because the SDK's generator is what kills the turn and
+    only one of them reaches callers as an exception:
+
+    1. The ValueError itself, when it escapes the seedagent loop (measured: it usually does not).
+    2. A turn that *ended with nothing*, which is what the cut-off reply normally leaves behind. The
+       loop's `run_turn` catches the error at `call_model`, logs a line and stops asking for tools, so
+       `session.send` returns True with no page written -- the failure is swallowed one layer below us
+       and only shows as an empty reply (see `_ended_empty`).
+
+    Every other exception keeps seedagent's own handling, where the explanation reaches the learner
+    through ui.error_text. The last attempt's ValueError is not caught, so `run_turn`'s handler still
+    turns a persistent failure into the page that explains it."""
     last: ValueError | None = None
-    for _ in range(max(1, attempts)):
+    total = max(1, attempts)
+    for attempt in range(1, total + 1):
+        ui.reset_reply()
         try:
-            return session.send(message)
+            ok = session.send(message)
         except ValueError as e:
             if "parse tool parameter JSON" not in str(e):
                 raise
             last = e
-            _log.warning("%s%s", ui._prefix, str(e).splitlines()[0])
-            if ui._turn_id:
-                progress.step(ui._turn_id, "The model's reply was malformed -- asking again", kind="think")
+            _log.warning("%s%s (attempt %d/%d)", ui._prefix, str(e).splitlines()[0], attempt, total)
+            continue
+        if ok and not ui.ended_empty():
+            return ok
+        # A completed turn with no page in it: the streamed tool call never parsed, or the loop gave up
+        # after too many tool calls. Nothing usable came back, so this attempt is spent like the other.
+        _log.warning("%sturn ended with empty reply (attempt %d/%d): %s", ui._prefix, attempt, total,
+                     ui.empty_reason or ui.error_text or "no text and no page")
+        last = last or ValueError(
+            "Unable to parse tool parameter JSON from model: the reply ended without a page"
+        )
+        if ui._turn_id and attempt < total:
+            progress.step(ui._turn_id, "The model's reply came back empty -- asking again", kind="think")
+    # Out of attempts: re-raise the real ValueError, never `last` blind. `last` can only be None if the
+    # loop body never ran (attempts < 1, impossible through the default), and `raise None` turned the
+    # one failure a learner is meant to see explained into a TypeError -- which no `except ValueError`
+    # upstream catches, so the turn became a 500 that never called progress.finish().
+    if last is None:  # pragma: no cover - defensive: the loop always raises or returns
+        raise RuntimeError("the model was never attempted")
     raise last
 
 
@@ -821,64 +946,80 @@ def run_turn(workspace: Path, message: str, resume: bool, turn_id: str = "",
         # feed needs a first line immediately or the panel sits empty and looks broken.
         progress.step(turn_id, opening, kind="think")
     result: TurnResult | None = None
-    with github_lookup.use_token(github_token), _turn_slot(turn_id):
-        reset_turn_budget()  # the per-turn GitHub lookup cap starts fresh for every instruction
-        reset_readme_budget()
-        with _agent_session(workspace, ui, INSTRUCTOR_TOOLS, resume) as _sess:
-            try:
-                ok = _streamed_send(ui, message)
-            except ValueError as e:
-                # Unparseable streamed tool call, out of retries (see _streamed_send): there is no reply to
-                # read at all, so this gets the one page that says so rather than a traceback and a blank
-                # screen.
-                ok = False
-                ui.error_text = str(e)
-            if not ok:
-                if ui.error_text and "parse tool parameter JSON" in ui.error_text:
-                    result = TurnResult(_malformed_reply_page())
-                else:
-                    result = TurnResult(_error_page(
-                        ui.error_text or "The agent did not answer (no further detail was reported)."))
-            elif not ui.final_text.strip():
-                result = TurnResult(_error_page(
-                    "The agent's reply was empty." + (f"\n\n{ui.error_text}" if ui.error_text else "")))
-            else:
+    try:
+        with github_lookup.use_token(github_token), _turn_slot(turn_id):
+            reset_turn_budget()  # the per-turn GitHub lookup cap starts fresh for every instruction
+            reset_readme_budget()
+            with _agent_session(workspace, ui, INSTRUCTOR_TOOLS, resume) as _sess:
                 try:
-                    page = _extract_json(ui.final_text)
-                except json.JSONDecodeError as e:
-                    result = TurnResult(_error_page(f"{e}\n\n{ui.final_text[:2000]}"))
+                    ok = _streamed_send(ui, message)
+                except ValueError as e:
+                    # Unparseable streamed tool call, out of retries (see _streamed_send): there is no reply to
+                    # read at all, so this gets the one page that says so rather than a traceback and a blank
+                    # screen. Any *other* ValueError is a real fault somewhere in the agent, and catching it
+                    # here would report it as "the reply was cut off" -- hiding the actual bug forever.
+                    if "parse tool parameter JSON" not in str(e):
+                        raise
+                    ok = False
+                    ui.error_text = str(e)
+                if not ok:
+                    if ui.error_text and "parse tool parameter JSON" in ui.error_text:
+                        result = TurnResult(_malformed_reply_page())
+                    else:
+                        result = TurnResult(_error_page(
+                            ui.error_text or "The agent did not answer (no further detail was reported)."))
+                elif not ui.final_text.strip():
+                    # Out of retries with a turn that produced no page: a cut-off (malformed) reply is the
+                    # usual cause, so it gets the page that says so and can be retried, rather than the
+                    # generic one -- _streamed_send already retried this and knows why it gave up.
+                    if ui.empty_notice or "parse tool parameter JSON" in (ui.empty_reason or ""):
+                        result = TurnResult(_malformed_reply_page())
+                    else:
+                        result = TurnResult(_error_page(
+                            "The agent's reply was empty." + (f"\n\n{ui.error_text}" if ui.error_text else "")))
                 else:
-                    # A plain page unwraps unchanged; the old {"roadmap": ..., "exercises": [...]} shape
-                    # (a resumed conversation that predates this, or a model that ignored the new
-                    # protocol) still unwraps too, so this stays a safe no-op either way.
-                    result = _split_exercises(page)
-                    if require_grounding and not result.exercises:
-                        # The roadmap turn designs the project; its exercises are written one at a time
-                        # right after, in this same still-open session, while the clone is still in
-                        # context -- see _write_exercises. Skipped when exercises already arrived with
-                        # the roadmap (the legacy shape above), so a resumed old conversation is not
-                        # asked to write every exercise twice.
-                        result.exercises = _write_exercises(ui, result.page, turn_id)
-                    # The turn produced valid page JSON -- but did it actually open a repository? A page
-                    # that skipped the clone is still well-formed, so without this the learner gets a
-                    # confident project naming a repository nobody read. The note goes on the page (not
-                    # an error page) because the rest of it is usually still useful, and this is a
-                    # visible caveat rather than a failed turn.
-                    note = _grounding_note(ui) if require_grounding else None
-                    if note:
-                        _log.warning("%s%s", ui._prefix, note)
-                        banner = {"type": "markdown", "content": f"> **Not verified.** {note}"}
-                        blocks = result.page.get("blocks")
-                        if isinstance(blocks, list):
-                            blocks.insert(0, banner)
-                        else:
-                            # A page without a usable blocks list would render nothing -- and the caveat
-                            # is the one thing that must not be lost, so it becomes the page rather than
-                            # a log line nobody reads.
-                            result.page = {"title": result.page.get("title") or "Not verified",
-                                           "blocks": [banner]}
-    if turn_id:
-        progress.finish(turn_id)
+                    try:
+                        page = _extract_json(ui.final_text)
+                    except json.JSONDecodeError as e:
+                        result = TurnResult(_error_page(f"{e}\n\n{ui.final_text[:2000]}"))
+                    else:
+                        # A plain page unwraps unchanged; the old {"roadmap": ..., "exercises": [...]} shape
+                        # (a resumed conversation that predates this, or a model that ignored the new
+                        # protocol) still unwraps too, so this stays a safe no-op either way.
+                        result = _split_exercises(page)
+                        if require_grounding and not result.exercises:
+                            # The roadmap turn designs the project; its exercises are written one at a time
+                            # right after, in this same still-open session, while the clone is still in
+                            # context -- see _write_exercises. Skipped when exercises already arrived with
+                            # the roadmap (the legacy shape above), so a resumed old conversation is not
+                            # asked to write every exercise twice.
+                            result.exercises = _write_exercises(ui, result.page, turn_id)
+                        # The turn produced valid page JSON -- but did it actually open a repository? A page
+                        # that skipped the clone is still well-formed, so without this the learner gets a
+                        # confident project naming a repository nobody read. The note goes on the page (not
+                        # an error page) because the rest of it is usually still useful, and this is a
+                        # visible caveat rather than a failed turn.
+                        note = _grounding_note(ui) if require_grounding else None
+                        if note:
+                            _log.warning("%s%s", ui._prefix, note)
+                            banner = {"type": "markdown", "content": f"> **Not verified.** {note}"}
+                            blocks = result.page.get("blocks")
+                            if isinstance(blocks, list):
+                                blocks.insert(0, banner)
+                            else:
+                                # A page without a usable blocks list would render nothing -- and the caveat
+                                # is the one thing that must not be lost, so it becomes the page rather than
+                                # a log line nobody reads.
+                                result.page = {"title": result.page.get("title") or "Not verified",
+                                               "blocks": [banner]}
+    finally:
+        # In the finally, not after the with-block: any exception that escapes this turn (an unrelated
+        # ValueError from session.send, a git failure, a bug in _write_exercises) used to skip this
+        # line, leaving the feed "working" forever -- the Stop button stayed disabled and the frontend
+        # polled a turn that would never finish. The error still propagates to routes.py as before;
+        # only the feed is now always closed.
+        if turn_id:
+            progress.finish(turn_id)
     assert result is not None
     return result
 
